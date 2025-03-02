@@ -1,0 +1,15 @@
+hyperparam_opt:
+  n_trials: 10  # Number of trials for hyperparameter optimization
+  direction: maximize  # Optimization direction (maximize or minimize)
+  params:
+    learning_rate:
+      type: float
+      low: 1e-5
+      high: 1e-2
+      log: True
+    batch_size:
+      type: categorical
+      choices: [16, 32, 64]
+    anchor_sizes:
+      type: categorical
+      choices: [[32, 64, 128], [64, 128, 256]]

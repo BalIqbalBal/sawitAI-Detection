@@ -1,0 +1,36 @@
+model:
+  name: FasterRCNN  # Model type
+  num_classes: 10  # Number of classes
+
+  # Backbone configuration
+  backbone:
+    _target_: backbone.MobileNetV2Backbone  # Backbone class
+    pretrained: True  # Whether to use a pretrained backbone
+
+  # Head configuration
+  head:
+    _target_: head.DetectionHead  # Head class
+    in_channels: 1280  # Input channels for the head
+    num_classes: 5  # Number of classes for the head
+
+  # Anchor generator configuration (for FasterRCNN)
+  anchor_generator:
+    sizes: ((32, 64, 128, 256, 512),)  # Anchor sizes
+    aspect_ratios: ((0.5, 1.0, 2.0),) * 5  # Aspect ratios
+
+  # ROI pooler configuration (for FasterRCNN)
+  roi_pooler:
+    featmap_names: ['0']  # Feature map names
+    output_size: 7  # Output size
+    sampling_ratio: 2  # Sampling ratio
+
+training:
+  epochs: 10
+  learning_rate: 0.001
+
+  # Optimizer configuration
+  optimizer:
+    _target_: torch.optim.Adam  # Specify the optimizer class
+    lr: 0.001  # Learning rate (can be overridden at runtime)
+
+  # Loss function configuration is default as pytorch torchvision implementation

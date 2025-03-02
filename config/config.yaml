@@ -1,0 +1,7 @@
+defaults:
+  - model: faster_rcnn.yaml
+  - dataset: coco_dataset.yaml
+  - hyperparam_opt: faster_rcnn_opt.yaml  # Default hyperparameter optimization config
+
+seed: 42
+device: cuda

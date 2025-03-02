@@ -1,0 +1,34 @@
+dataset:
+  name: COCODataset
+  root_dir: data/mopad/
+  annotation_file: data/mopad/annotations.json
+  batch_size: 32
+  shuffle: True
+  num_workers: 4
+  train_ratio: 0.7
+  test_ratio: 0.2
+  eval_ratio: 0.1
+  transform:
+    train:  # Transformations for the training set
+      - name: Resize
+        size: [256, 256]
+      - name: RandomHorizontalFlip
+        p: 0.5
+      - name: ToTensor
+      - name: Normalize
+        mean: [0.485, 0.456, 0.406]
+        std: [0.229, 0.224, 0.225]
+    test:  # Transformations for the test set
+      - name: Resize
+        size: [256, 256]
+      - name: ToTensor
+      - name: Normalize
+        mean: [0.485, 0.456, 0.406]
+        std: [0.229, 0.224, 0.225]
+    eval:  # Transformations for the evaluation set
+      - name: Resize
+        size: [256, 256]
+      - name: ToTensor
+      - name: Normalize
+        mean: [0.485, 0.456, 0.406]
+        std: [0.229, 0.224, 0.225]
