@@ -5,17 +5,6 @@ backbone:
   _target_: torchvision.models.mobilenet_v2  # Use torchvision's MobileNetV2
   pretrained: True  # Whether to use a pretrained backbone
 
-# Anchor generator configuration (for FasterRCNN)
-anchor_generator:
-  sizes: ((32, 64, 128, 256, 512),)  # Anchor sizes
-  aspect_ratios: ((0.5, 1.0, 2.0),) * 5  # Aspect ratios
-
-# ROI pooler configuration (for FasterRCNN)
-roi_pooler:
-  featmap_names: ['0']  # Feature map names
-  output_size: 7  # Output size
-  sampling_ratio: 2  # Sampling ratio
-
 training:
 epochs: 10
 learning_rate: 0.001

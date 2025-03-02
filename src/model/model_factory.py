@@ -13,25 +13,12 @@ def get_model(cfg: DictConfig):
         # Instantiate the backbone
         backbone = instantiate(cfg.model.backbone)
 
-        # Instantiate the anchor generator
-        anchor_generator = AnchorGenerator(
-            sizes=cfg.model.anchor_generator.sizes,
-            aspect_ratios=cfg.model.anchor_generator.aspect_ratios
-        )
-
-        # Instantiate the ROI pooler
-        roi_pooler = MultiScaleRoIAlign(
-            featmap_names=cfg.model.roi_pooler.featmap_names,
-            output_size=cfg.model.roi_pooler.output_size,
-            sampling_ratio=cfg.model.roi_pooler.sampling_ratio
-        )
-
+        backbone.out_channels = 1280
+        
         # Create the Faster R-CNN model
         model = FasterRCNN(
             backbone,
             num_classes=cfg.model.num_classes,
-            rpn_anchor_generator=anchor_generator,
-            box_roi_pool=roi_pooler
         )
     else:
         raise ValueError(f"Model {cfg.model.name} not supported")
