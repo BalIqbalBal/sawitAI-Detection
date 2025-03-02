@@ -1,16 +1,9 @@
 name: FasterRCNN  # Model type
-num_classes: 10  # Number of classes
+num_classes: 5  # Number of classes
 
-# Backbone configuration
 backbone:
-  _target_: backbone.MobileNetV2Backbone  # Backbone class
+  _target_: torchvision.models.mobilenet_v2  # Use torchvision's MobileNetV2
   pretrained: True  # Whether to use a pretrained backbone
-
-# Head configuration
-head:
-  _target_: head.DetectionHead  # Head class
-  in_channels: 1280  # Input channels for the head
-  num_classes: 5  # Number of classes for the head
 
 # Anchor generator configuration (for FasterRCNN)
 anchor_generator:
