@@ -2,25 +2,13 @@ import hydra
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 import torch
-from torch import nn, optim
-from sklearn.metrics import accuracy_score, f1_score, recall_score, mean_squared_error, mean_absolute_error, roc_auc_score, confusion_matrix
 import numpy as np
 import mlflow
 import mlflow.pytorch
-import matplotlib.pyplot as plt
-import seaborn as sns
 from model.model_factory import get_model
 from dataset.data_factory import get_dataset, get_dataloader
 from utils.utils import save_model
-
-def plot_confusion_matrix(conf_matrix, class_names, filename):
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(conf_matrix, annot=True, fmt="d", cmap="Blues", xticklabels=class_names, yticklabels=class_names)
-    plt.xlabel("Predicted")
-    plt.ylabel("Actual")
-    plt.title("Confusion Matrix")
-    plt.savefig(filename)
-    plt.close()
+from utils.coco_utils import convert_to_coco_format, evaluate_detections, plot_precision_recall_curve
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def train(cfg: DictConfig):
@@ -58,19 +46,16 @@ def train(cfg: DictConfig):
         # Training loop
         for epoch in range(cfg.model.epochs):
             model.train()
+            epoch_loss = 0
+            
             for batch_idx, (images, targets) in enumerate(train_dataloader):
                 images = list(img.to(device) for img in images)
                 targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
 
-                if cfg.model.model_type == "FasterRCNN":
-                    loss_dict = model(images, targets)
-                    loss = sum(loss for loss in loss_dict.values())
-                else:
-                    # Forward pass
-                    output = model(images)
-                    criterion = instantiate(cfg.model.loss_fn)
-                    print(f"Loss function: {criterion}")
-                    loss = criterion(output, target)
+                # Forward pass
+                loss_dict = model(images, targets)
+                loss = sum(loss for loss in loss_dict.values())
+                epoch_loss += loss.item()
 
                 # Backward pass
                 optimizer.zero_grad()
@@ -82,90 +67,99 @@ def train(cfg: DictConfig):
                     print(f"Epoch [{epoch+1}/{cfg.model.epochs}], Batch [{batch_idx}/{len(train_dataloader)}], Loss: {loss.item():.4f}")
                     mlflow.log_metric("train_loss", loss.item(), step=epoch * len(train_dataloader) + batch_idx)
 
+            # Log average epoch loss
+            avg_epoch_loss = epoch_loss / len(train_dataloader)
+            mlflow.log_metric("avg_train_loss", avg_epoch_loss, step=epoch)
+            
             # Evaluation on the eval dataset after each epoch
             model.eval()
-            all_targets = []
             all_predictions = []
+            all_targets = []
+            image_ids = []
+            
             with torch.no_grad():
-                for data, target in eval_dataloader:
-                    data, target = data.to(device), target.to(device)
-                    output = model(data)
-                    predictions = torch.argmax(output, dim=1)
-                    all_targets.extend(target.cpu().numpy())
-                    all_predictions.extend(predictions.cpu().numpy())
-
-            # Metrics
-            accuracy = accuracy_score(all_targets, all_predictions)
-            f1 = f1_score(all_targets, all_predictions, average="weighted")
-            recall = recall_score(all_targets, all_predictions, average="weighted")
-            mse = mean_squared_error(all_targets, all_predictions)
-            mae = mean_absolute_error(all_targets, all_predictions)
-            auc = roc_auc_score(all_targets, all_predictions)
-            conf_matrix = confusion_matrix(all_targets, all_predictions)
-
+                for i, (images, targets) in enumerate(eval_dataloader):
+                    images = list(img.to(device) for img in images)
+                    outputs = model(images)
+                    
+                    # Store predictions and targets
+                    all_predictions.extend(outputs)
+                    all_targets.extend(targets)
+                    image_ids.extend(range(i * len(images), (i + 1) * len(images)))
+            
+            # Convert to COCO format and evaluate
+            coco_gt, coco_dt = convert_to_coco_format(all_predictions, all_targets, image_ids)
+            metrics, pr_curves = evaluate_detections(coco_gt, coco_dt)
+            
             # Log metrics
             mlflow.log_metrics({
-                "eval_accuracy": accuracy,
-                "eval_f1": f1,
-                "eval_recall": recall,
-                "eval_mse": mse,
-                "eval_mae": mae,
-                "eval_auc": auc,
+                "eval_mAP": metrics["mAP"],
+                "eval_AP50": metrics["AP50"],
+                "eval_AP75": metrics["AP75"],
+                "eval_AP_small": metrics["AP_small"],
+                "eval_AP_medium": metrics["AP_medium"],
+                "eval_AP_large": metrics["AP_large"],
+                "eval_AR_max1": metrics["AR_max1"],
+                "eval_AR_max10": metrics["AR_max10"],
+                "eval_AR_max100": metrics["AR_max100"],
             }, step=epoch)
-
-            # Plot and log confusion matrix
-            class_names = [str(i) for i in range(cfg.model.num_classes)]  # Replace with actual class names if available
-            plot_confusion_matrix(conf_matrix, class_names, "confusion_matrix.png")
-            mlflow.log_artifact("confusion_matrix.png")
-
-            print(f"Epoch [{epoch+1}/{cfg.model.epochs}], Eval Accuracy: {accuracy:.4f}, F1: {f1:.4f}, Recall: {recall:.4f}, MSE: {mse:.4f}, MAE: {mae:.4f}, AUC: {auc:.4f}")
-            print("Eval Confusion Matrix:")
-            print(conf_matrix)
+            
+            # Plot and log precision-recall curves
+            for cat_id, (recalls, precisions) in pr_curves.items():
+                ap = np.mean(precisions)
+                filename = f"pr_curve_cat{cat_id}_epoch{epoch}.png"
+                plot_precision_recall_curve(precisions, recalls, ap, filename)
+                mlflow.log_artifact(filename)
+            
+            print(f"Epoch [{epoch+1}/{cfg.model.epochs}], Eval mAP: {metrics['mAP']:.4f}, AP50: {metrics['AP50']:.4f}, AP75: {metrics['AP75']:.4f}")
 
         # Test the model on the test dataset after training
         model.eval()
-        all_targets = []
         all_predictions = []
+        all_targets = []
+        image_ids = []
+        
         with torch.no_grad():
-            for data, target in test_dataloader:
-                data, target = data.to(device), target.to(device)
-                output = model(data)
-                predictions = torch.argmax(output, dim=1)
-                all_targets.extend(target.cpu().numpy())
-                all_predictions.extend(predictions.cpu().numpy())
-
-        # Metrics
-        accuracy = accuracy_score(all_targets, all_predictions)
-        f1 = f1_score(all_targets, all_predictions, average="weighted")
-        recall = recall_score(all_targets, all_predictions, average="weighted")
-        mse = mean_squared_error(all_targets, all_predictions)
-        mae = mean_absolute_error(all_targets, all_predictions)
-        auc = roc_auc_score(all_targets, all_predictions)
-        conf_matrix = confusion_matrix(all_targets, all_predictions)
-
+            for i, (images, targets) in enumerate(test_dataloader):
+                images = list(img.to(device) for img in images)
+                outputs = model(images)
+                
+                # Store predictions and targets
+                all_predictions.extend(outputs)
+                all_targets.extend(targets)
+                image_ids.extend(range(i * len(images), (i + 1) * len(images)))
+        
+        # Convert to COCO format and evaluate
+        coco_gt, coco_dt = convert_to_coco_format(all_predictions, all_targets, image_ids)
+        metrics, pr_curves = evaluate_detections(coco_gt, coco_dt)
+        
         # Log test metrics
         mlflow.log_metrics({
-            "test_accuracy": accuracy,
-            "test_f1": f1,
-            "test_recall": recall,
-            "test_mse": mse,
-            "test_mae": mae,
-            "test_auc": auc,
+            "test_mAP": metrics["mAP"],
+            "test_AP50": metrics["AP50"],
+            "test_AP75": metrics["AP75"],
+            "test_AP_small": metrics["AP_small"],
+            "test_AP_medium": metrics["AP_medium"],
+            "test_AP_large": metrics["AP_large"],
+            "test_AR_max1": metrics["AR_max1"],
+            "test_AR_max10": metrics["AR_max10"],
+            "test_AR_max100": metrics["AR_max100"],
         })
-
-        # Plot and log test confusion matrix
-        plot_confusion_matrix(conf_matrix, class_names, "test_confusion_matrix.png")
-        mlflow.log_artifact("test_confusion_matrix.png")
-
-        print(f"Test Accuracy: {accuracy:.4f}, F1: {f1:.4f}, Recall: {recall:.4f}, MSE: {mse:.4f}, MAE: {mae:.4f}, AUC: {auc:.4f}")
-        print("Test Confusion Matrix:")
-        print(conf_matrix)
-
+        
+        # Plot and log test precision-recall curves
+        for cat_id, (recalls, precisions) in pr_curves.items():
+            ap = np.mean(precisions)
+            filename = f"test_pr_curve_cat{cat_id}.png"
+            plot_precision_recall_curve(precisions, recalls, ap, filename)
+            mlflow.log_artifact(filename)
+        
+        print(f"Test mAP: {metrics['mAP']:.4f}, AP50: {metrics['AP50']:.4f}, AP75: {metrics['AP75']:.4f}")
+        
         # Save model and log it as an artifact
         save_model(model, "model.pth", cfg.model.name)
         mlflow.log_artifact("model.pth")
-
-        return accuracy
+        
+        return metrics["mAP"]
 
 if __name__ == "__main__":
     train()
