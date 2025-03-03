@@ -62,7 +62,7 @@ def train(cfg: DictConfig):
                 images = list(img.to(device) for img in images)
                 targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
 
-                if cfg.model.name == "FasterRCNN":
+                if cfg.model.model_type == "FasterRCNN":
                     loss_dict = model(images, targets)
                     loss = sum(loss for loss in loss_dict.values())
                 else:
