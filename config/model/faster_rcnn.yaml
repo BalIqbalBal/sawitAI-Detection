@@ -1,17 +1,26 @@
 name: FasterRCNN  # Model type
 num_classes: 5  # Number of classes
-
-backbone:
-  _target_: torchvision.models.mobilenet_v2  # Use torchvision's MobileNetV2
-  pretrained: True  # Whether to use a pretrained backbone
-
-training:
 epochs: 10
 learning_rate: 0.001
+
+# Backbone configuration
+backbone:
+  _target_: torchvision.models.detection.backbone_utils.resnet_fpn_backbone  # Use ResNet50-FPN
+  backbone_name: resnet50  # Specify ResNet50
+  pretrained: True  # Whether to use a pretrained backbone
+  trainable_layers: 3  # Number of trainable layers (optional)
+
+anchor_generator:
+  sizes: ((32,), (64,), (128,), (256,), (512,))  # Anchor sizes for each feature map
+  aspect_ratios: ((0.5, 1.0, 2.0),) * 5  # Aspect ratios for each feature map
+
+# ROI pooler configuration (for FasterRCNN)
+roi_pooler:
+  featmap_names: ['0', '1', '2', '3']  # Feature map names for FPN
+  output_size: 7  # Output size
+  sampling_ratio: 2  # Sampling ratio
 
 # Optimizer configuration
 optimizer:
   _target_: torch.optim.Adam  # Specify the optimizer class
   lr: 0.001  # Learning rate (can be overridden at runtime)
-
-# Loss function configuration is default as pytorch torchvision implementation

@@ -5,6 +5,8 @@ from torchvision.models.detection import FasterRCNN
 from torchvision.models.detection.rpn import AnchorGenerator
 from torchvision.ops import MultiScaleRoIAlign
 
+import torch
+
 def get_model(cfg: DictConfig):
     """Initialize the model based on the configuration."""
 
@@ -12,9 +14,9 @@ def get_model(cfg: DictConfig):
     if cfg.model.name == "FasterRCNN":
         # Instantiate the backbone
         backbone = instantiate(cfg.model.backbone)
-
-        backbone.out_channels = 1280
-        
+        backbone = torch.nn.Sequential(*list(backbone.children())[:-2])
+        backbone.out_channels = 256  # FPN outputs 256 channels per feature map
+       
         # Create the Faster R-CNN model
         model = FasterRCNN(
             backbone,

@@ -41,33 +41,34 @@ def train(cfg: DictConfig):
     model = get_model(cfg).to(device)
 
     # Instantiate the optimizer
-    optimizer = instantiate(cfg.training.optimizer, model.parameters(), lr=cfg.training.learning_rate)
+    optimizer = instantiate(cfg.model.optimizer, model.parameters(), lr=cfg.model.optimizer.lr)
     print(f"Optimizer: {optimizer}")
 
     # Start MLflow run
     with mlflow.start_run():
         # Log parameters
         mlflow.log_params({
-            "epochs": cfg.training.epochs,
-            "learning_rate": cfg.training.learning_rate,
+            "epochs": cfg.model.epochs,
+            "learning_rate": cfg.model.optimizer.lr,
             "batch_size": cfg.dataset.batch_size,
             "model": cfg.model.name,
             "dataset": cfg.dataset.name,
         })
 
         # Training loop
-        for epoch in range(cfg.training.epochs):
+        for epoch in range(cfg.model.epochs):
             model.train()
-            for batch_idx, (data, target) in enumerate(train_dataloader):
-                data, target = data.to(device), target.to(device)
+            for batch_idx, (images, targets) in enumerate(train_dataloader):
+                images = list(img.to(device) for img in images)
+                targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
 
                 if cfg.model.name == "FasterRCNN":
-                    loss_dict = model(data, target)
+                    loss_dict = model(images, targets)
                     loss = sum(loss for loss in loss_dict.values())
                 else:
                     # Forward pass
-                    output = model(data)
-                    criterion = instantiate(cfg.training.loss_fn)
+                    output = model(images)
+                    criterion = instantiate(cfg.model.loss_fn)
                     print(f"Loss function: {criterion}")
                     loss = criterion(output, target)
 
@@ -78,7 +79,7 @@ def train(cfg: DictConfig):
 
                 # Logging
                 if batch_idx % 10 == 0:
-                    print(f"Epoch [{epoch+1}/{cfg.training.epochs}], Batch [{batch_idx}/{len(train_dataloader)}], Loss: {loss.item():.4f}")
+                    print(f"Epoch [{epoch+1}/{cfg.model.epochs}], Batch [{batch_idx}/{len(train_dataloader)}], Loss: {loss.item():.4f}")
                     mlflow.log_metric("train_loss", loss.item(), step=epoch * len(train_dataloader) + batch_idx)
 
             # Evaluation on the eval dataset after each epoch
@@ -117,7 +118,7 @@ def train(cfg: DictConfig):
             plot_confusion_matrix(conf_matrix, class_names, "confusion_matrix.png")
             mlflow.log_artifact("confusion_matrix.png")
 
-            print(f"Epoch [{epoch+1}/{cfg.training.epochs}], Eval Accuracy: {accuracy:.4f}, F1: {f1:.4f}, Recall: {recall:.4f}, MSE: {mse:.4f}, MAE: {mae:.4f}, AUC: {auc:.4f}")
+            print(f"Epoch [{epoch+1}/{cfg.model.epochs}], Eval Accuracy: {accuracy:.4f}, F1: {f1:.4f}, Recall: {recall:.4f}, MSE: {mse:.4f}, MAE: {mae:.4f}, AUC: {auc:.4f}")
             print("Eval Confusion Matrix:")
             print(conf_matrix)
 

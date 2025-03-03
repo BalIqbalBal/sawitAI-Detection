@@ -1,7 +1,13 @@
+import hydra
+from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader, random_split
 from dataset.dataset import MyDataset
 from dataset.coco_dataset_mopad import COCODataset
 from torchvision import transforms
+from hydra.utils import instantiate
+
+def collate_fn(batch):
+    return tuple(zip(*batch))
 
 def get_transform(transform_config):
     """
@@ -13,12 +19,7 @@ def get_transform(transform_config):
     Returns:
         transform: A composed transformation pipeline.
     """
-    transform_list = []
-    for transform_item in transform_config:
-        transform_name = transform_item.name
-        transform_params = {k: v for k, v in transform_item.items() if k != "name"}
-        transform_class = getattr(transforms, transform_name)
-        transform_list.append(transform_class(**transform_params))
+    transform_list = [instantiate(transform_item) for transform_item in transform_config]
     return transforms.Compose(transform_list)
 
 def get_dataset(cfg):
@@ -31,31 +32,22 @@ def get_dataset(cfg):
     Returns:
         train_dataset, test_dataset, eval_dataset: Split datasets with transformations applied.
     """
-    # Get transformations for train, test, and eval sets
-    train_transform = get_transform(cfg.dataset.transform.train) if "transform" in cfg.dataset and "train" in cfg.dataset.transform else None
-    test_transform = get_transform(cfg.dataset.transform.test) if "transform" in cfg.dataset and "test" in cfg.dataset.transform else None
-    eval_transform = get_transform(cfg.dataset.transform.eval) if "transform" in cfg.dataset and "eval" in cfg.dataset.transform else None
+    train_transform = get_transform(cfg.dataset.transform.train) if "train" in cfg.dataset.transform else None
+    test_transform = get_transform(cfg.dataset.transform.test) if "test" in cfg.dataset.transform else None
+    eval_transform = get_transform(cfg.dataset.transform.eval) if "eval" in cfg.dataset.transform else None
 
-    if cfg.dataset.name == "MyDataset":
-        train_dataset = MyDataset(root_dir=cfg.dataset.root_dir, transform=train_transform)
-        test_dataset = MyDataset(root_dir=cfg.dataset.root_dir, transform=test_transform)
-        eval_dataset = MyDataset(root_dir=cfg.dataset.root_dir, transform=eval_transform)
-    elif cfg.dataset.name == "COCODataset":
-        train_dataset = COCODataset(root_dir=cfg.dataset.root_dir, annotation_file=cfg.dataset.annotation_file, transform=train_transform)
-        test_dataset = COCODataset(root_dir=cfg.dataset.root_dir, annotation_file=cfg.dataset.annotation_file, transform=test_transform)
-        eval_dataset = COCODataset(root_dir=cfg.dataset.root_dir, annotation_file=cfg.dataset.annotation_file, transform=eval_transform)
-    else:
+    dataset_class = globals().get(cfg.dataset.name, None)
+    if dataset_class is None:
         raise ValueError(f"Dataset {cfg.dataset.name} not supported")
+    
+    dataset = dataset_class(root_dir=cfg.dataset.root_dir, annotation_file=cfg.dataset.annotation_file, transform=train_transform)
+    
+    train_size = int(cfg.dataset.train_ratio * len(dataset))
+    test_size = int(cfg.dataset.test_ratio * len(dataset))
+    eval_size = len(dataset) - train_size - test_size
 
-    # Split dataset into train, test, and eval
-    train_size = int(cfg.dataset.train_ratio * len(train_dataset))
-    test_size = int(cfg.dataset.test_ratio * len(train_dataset))
-    eval_size = len(train_dataset) - train_size - test_size
-
-    train_dataset, test_dataset, eval_dataset = random_split(
-        train_dataset, [train_size, test_size, eval_size]
-    )
-
+    train_dataset, test_dataset, eval_dataset = random_split(dataset, [train_size, test_size, eval_size])
+    
     return train_dataset, test_dataset, eval_dataset
 
 def get_dataloader(cfg, dataset):
@@ -73,5 +65,5 @@ def get_dataloader(cfg, dataset):
         dataset,
         batch_size=cfg.dataset.batch_size,
         shuffle=cfg.dataset.shuffle,
-        num_workers=cfg.dataset.num_workers,
+        collate_fn = collate_fn
     )
