@@ -8,3 +8,4 @@ mlflow
 optuna
 plotly
 tifffile
+pycocotools
