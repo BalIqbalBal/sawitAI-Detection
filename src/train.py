@@ -78,6 +78,10 @@ def train(cfg: DictConfig):
         for epoch in range(cfg.model.epochs):
             model.train()
             epoch_loss = 0
+
+            # Update epoch_now for YoloDataset (if applicable)
+            if hasattr(train_dataset, "epoch_now"):
+                train_dataset.epoch_now = epoch
             
             # Use tqdm for progress bar
             with tqdm(train_dataloader, desc=f"Epoch [{epoch+1}/{cfg.model.epochs}]") as pbar:
@@ -104,6 +108,8 @@ def train(cfg: DictConfig):
             # Log average epoch loss
             avg_epoch_loss = epoch_loss / len(train_dataloader)
             mlflow.log_metric("avg_train_loss", avg_epoch_loss, step=epoch)
+
+            # Evaluate on the train dataset after each epoch
             metrics, pr_curves, confusion_matrix_file = evaluate_model(model, train_dataloader, device)
 
             # Log evaluation metrics

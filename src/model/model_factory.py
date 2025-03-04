@@ -6,6 +6,8 @@ from torchvision.models.detection.rpn import AnchorGenerator
 from torchvision.ops import MultiScaleRoIAlign
 from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
 
+from src.model.yolo.yolo import YOLO
+
 import torch
 
 def build_faster_rcnn(cfg):
@@ -24,7 +26,9 @@ def build_faster_rcnn(cfg):
 
 def build_yolo(cfg):
     """Placeholder for YOLO model initialization."""
-    pass
+    model = YOLO(cfg)
+
+    return model
 
 def build_detr(cfg):
     """Placeholder for DETR model initialization."""

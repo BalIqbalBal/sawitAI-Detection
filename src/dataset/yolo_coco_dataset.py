@@ -1,3 +1,5 @@
+# reference https://github.com/bubbliiiing/yolov8-pytorch/blob/master/utils/dataloader.py
+
 import os
 import cv2
 import numpy as np
@@ -9,10 +11,10 @@ from random import sample, shuffle
 
 from utils.utils import cvtColor, preprocess_input
 
-class YoloDataset(Dataset):
+class YoloCOCODataset(Dataset):
     def __init__(self, root_dir, annotation_file, input_shape, num_classes, epoch_length, \
                  mosaic, mixup, mosaic_prob, mixup_prob, train, special_aug_ratio=0.7, transform=None):
-        super(YoloDataset, self).__init__()
+        super(YoloCOCODataset, self).__init__()
         self.root_dir = root_dir
         self.coco = COCO(annotation_file)
         self.input_shape = input_shape

@@ -2,7 +2,8 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader, random_split
 from dataset.dataset import MyDataset
-from dataset.coco_dataset_mopad import COCODataset
+from dataset.coco_dataset import COCODataset
+from dataset.yolo_coco_dataset import YoloCOCODataset  # Import the new YoloDataset
 from torchvision import transforms
 from hydra.utils import instantiate
 
@@ -36,12 +37,35 @@ def get_dataset(cfg):
     test_transform = get_transform(cfg.dataset.transform.test) if "test" in cfg.dataset.transform else None
     eval_transform = get_transform(cfg.dataset.transform.eval) if "eval" in cfg.dataset.transform else None
 
+    # Lookup the dataset class by name
     dataset_class = globals().get(cfg.dataset.name, None)
     if dataset_class is None:
         raise ValueError(f"Dataset {cfg.dataset.name} not supported")
     
-    dataset = dataset_class(root_dir=cfg.dataset.root_dir, annotation_file=cfg.dataset.annotation_file, transform=train_transform)
+    # Initialize the dataset
+    if cfg.dataset.name == "YoloCOCODataset":
+        dataset = dataset_class(
+            root_dir=cfg.dataset.root_dir,
+            annotation_file=cfg.dataset.annotation_file,
+            input_shape=cfg.dataset.input_shape,
+            num_classes=cfg.dataset.num_classes,
+            epoch_length=cfg.dataset.epoch_length,
+            mosaic=cfg.dataset.mosaic,
+            mixup=cfg.dataset.mixup,
+            mosaic_prob=cfg.dataset.mosaic_prob,
+            mixup_prob=cfg.dataset.mixup_prob,
+            train=True,  # Assume training mode for the full dataset
+            special_aug_ratio=cfg.dataset.special_aug_ratio,
+            transform=train_transform
+        )
+    else:
+        dataset = dataset_class(
+            root_dir=cfg.dataset.root_dir,
+            annotation_file=cfg.dataset.annotation_file,
+            transform=train_transform
+        )
     
+    # Split the dataset
     train_size = int(cfg.dataset.train_ratio * len(dataset))
     test_size = int(cfg.dataset.test_ratio * len(dataset))
     eval_size = len(dataset) - train_size - test_size
@@ -65,5 +89,6 @@ def get_dataloader(cfg, dataset):
         dataset,
         batch_size=cfg.dataset.batch_size,
         shuffle=cfg.dataset.shuffle,
-        collate_fn = collate_fn
+        num_workers=cfg.dataset.num_workers,
+        collate_fn=collate_fn
     )

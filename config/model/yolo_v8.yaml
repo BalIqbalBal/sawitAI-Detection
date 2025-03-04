@@ -1,0 +1,16 @@
+model_type: YOLO  # Model type
+name: YOLOv8
+num_classes: 6  # Number of classes
+epochs: 10
+learning_rate: 0.001
+
+phi: 's'  # Scaling factor for YOLO
+
+backbone:
+  _target_: model.backbone.darknet.DarkNet  # Path to the backbone class
+  pretrained: False
+
+post_process:
+  confidence_threshold: 0.5
+  nms_iou_threshold: 0.45
+  letterbox_image: True
