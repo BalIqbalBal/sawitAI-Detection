@@ -30,7 +30,7 @@ def convert_to_coco_format(predictions, targets, image_ids):
     
     Args:
         predictions: List of prediction dictionaries (boxes, scores, labels)
-        targets: List of target dictionaries (annotations)
+        targets: List of target dictionaries (boxes, labels)
         image_ids: List of image IDs
         
     Returns:
@@ -39,49 +39,56 @@ def convert_to_coco_format(predictions, targets, image_ids):
     """
     coco_gt = {"images": [], "annotations": [], "categories": []}
     coco_dt = []
-    
-    # Create categories
-    category_map = {}
-    for i, cat in enumerate(set([ann["category_id"] for target in targets for ann in target["annotations"]])):
-        category_map[cat] = i
-        coco_gt["categories"].append({"id": i, "name": str(cat)})
-    
+
+    # Pastikan targets memiliki category_id dengan mengambilnya dari 'labels'
+    category_ids = set()
+    for target in targets:
+        if "labels" in target:
+            category_ids.update(target["labels"].tolist())
+
+    category_map = {cat: i for i, cat in enumerate(sorted(category_ids))}
+    for cat, idx in category_map.items():
+        coco_gt["categories"].append({"id": idx, "name": str(cat)})
+
     ann_id = 0
     for i, (target, image_id) in enumerate(zip(targets, image_ids)):
-        # Add image info
+        # Tambahkan informasi gambar
         coco_gt["images"].append({
             "id": image_id,
-            "width": target.get("width", 800),
-            "height": target.get("height", 600)
+            "width": 800,  # Gantilah dengan ukuran gambar sebenarnya jika diketahui
+            "height": 600
         })
-        
-        # Add ground truth annotations
-        for ann in target["annotations"]:
-            x, y, w, h = ann["bbox"]
-            coco_gt["annotations"].append({
-                "id": ann_id,
-                "image_id": image_id,
-                "category_id": category_map[ann["category_id"]],
-                "bbox": [x, y, w, h],
-                "area": w * h,
-                "iscrowd": 0
-            })
-            ann_id += 1
-        
-        # Add predictions
-        if i < len(predictions):
-            pred = predictions[i]
-            for box, score, label in zip(pred["boxes"], pred["scores"], pred["labels"]):
+
+        # Konversi ground truth dari 'boxes' dan 'labels'
+        if "boxes" in target and "labels" in target:
+            for box, label in zip(target["boxes"], target["labels"]):
                 x, y, w, h = box[0].item(), box[1].item(), (box[2] - box[0]).item(), (box[3] - box[1]).item()
-                coco_dt.append({
+                coco_gt["annotations"].append({
+                    "id": ann_id,
                     "image_id": image_id,
                     "category_id": category_map.get(label.item(), 0),
                     "bbox": [x, y, w, h],
-                    "score": score.item(),
-                    "area": w * h
+                    "area": w * h,
+                    "iscrowd": 0
                 })
-    
+                ann_id += 1
+
+        # Konversi prediksi ke COCO format
+        if i < len(predictions):
+            pred = predictions[i]
+            if "boxes" in pred and "labels" in pred and "scores" in pred:
+                for box, score, label in zip(pred["boxes"], pred["scores"], pred["labels"]):
+                    x, y, w, h = box[0].item(), box[1].item(), (box[2] - box[0]).item(), (box[3] - box[1]).item()
+                    coco_dt.append({
+                        "image_id": image_id,
+                        "category_id": category_map.get(label.item(), 0),
+                        "bbox": [x, y, w, h],
+                        "score": score.item(),
+                        "area": w * h
+                    })
+
     return coco_gt, coco_dt
+
 
 def evaluate_detections(coco_gt, coco_dt):
     """
