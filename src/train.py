@@ -27,6 +27,7 @@ def train(cfg: DictConfig):
 
     # Model (dynamically loaded)
     model = get_model(cfg).to(device)
+    print(f"Model: {model}")
 
     # Instantiate the optimizer
     optimizer = instantiate(cfg.model.optimizer, model.parameters(), lr=cfg.model.optimizer.lr)
