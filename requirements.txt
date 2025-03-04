@@ -9,3 +9,4 @@ optuna
 plotly
 tifffile
 pycocotools
+tqdm
