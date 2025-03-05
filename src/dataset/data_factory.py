@@ -7,6 +7,13 @@ from dataset.yolo_coco_dataset import YoloCOCODataset  # Import the new YoloData
 from torchvision import transforms
 from hydra.utils import instantiate
 
+# Mapping of dataset names to classes
+DATASET_MAPPING = {
+    "MyDataset": MyDataset,
+    "COCODataset": COCODataset,
+    "YoloCOCODataset": YoloCOCODataset,
+}
+
 def collate_fn(batch):
     return tuple(zip(*batch))
 
@@ -37,8 +44,8 @@ def get_dataset(cfg):
     test_transform = get_transform(cfg.dataset.transform.test) if "test" in cfg.dataset.transform else None
     eval_transform = get_transform(cfg.dataset.transform.eval) if "eval" in cfg.dataset.transform else None
 
-    # Lookup the dataset class by name
-    dataset_class = globals().get(cfg.dataset.name, None)
+    # Get the dataset class from mapping
+    dataset_class = DATASET_MAPPING.get(cfg.dataset.name)
     if dataset_class is None:
         raise ValueError(f"Dataset {cfg.dataset.name} not supported")
     

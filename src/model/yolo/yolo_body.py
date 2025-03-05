@@ -57,19 +57,18 @@ class YoloBody(nn.Module):
     def __init__(self, cfg: DictConfig):
         super(YoloBody, self).__init__()
         # Extract configuration parameters
-        model_cfg = cfg.model
 
         depth_dict = {'n': 0.33, 's': 0.33, 'm': 0.67, 'l': 1.00, 'x': 1.00}
         width_dict = {'n': 0.25, 's': 0.50, 'm': 0.75, 'l': 1.00, 'x': 1.25}
         deep_width_dict = {'n': 1.00, 's': 1.00, 'm': 0.75, 'l': 0.50, 'x': 0.50}
 
-        dep_mul, wid_mul, deep_mul = depth_dict[model_cfg.phi], width_dict[model_cfg.phi], deep_width_dict[model_cfg.phi]
+        dep_mul, wid_mul, deep_mul = depth_dict[cfg.phi], width_dict[cfg.phi], deep_width_dict[cfg.phi]
 
-        base_channels = int(wid_mul * cfg.backbone.base_channels)
-        base_depth = max(round(dep_mul * cfg.backbone.base_depth), 1)
+        base_channels = int(wid_mul * cfg.base_channels)
+        base_depth = max(round(dep_mul * cfg.base_depth), 1)
 
         # Initialize backbone (dynamically instantiated by Hydra)
-        self.backbone = instantiate(cfg.backbone,base_channels=base_channels, base_depth=base_depth, deep_mul=dep_mul, phi=model_cfg.phi)
+        self.backbone = instantiate(cfg.backbone,base_channels=base_channels, base_depth=base_depth, deep_mul=dep_mul, phi=cfg.phi)
         
 
         # Initialize other components
@@ -86,12 +85,12 @@ class YoloBody(nn.Module):
         self.nl = len(ch)
         self.stride = torch.tensor([256 / x.shape[-2] for x in self.backbone.forward(torch.zeros(1, 3, 256, 256))])
         self.reg_max = 16
-        self.no = model_cfg.num_classes + self.reg_max * 4
-        self.num_classes = model_cfg.num_classes
+        self.no = cfg.num_classes + self.reg_max * 4
+        self.num_classes = cfg.num_classes
 
-        c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], model_cfg.num_classes)
+        c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], cfg.num_classes)
         self.cv2 = nn.ModuleList(nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch)
-        self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, model_cfg.num_classes, 1)) for x in ch)
+        self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, cfg.num_classes, 1)) for x in ch)
         if not cfg.backbone.pretrained:
             weights_init(self)
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
