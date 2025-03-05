@@ -6,7 +6,7 @@ from torchvision.models.detection.rpn import AnchorGenerator
 from torchvision.ops import MultiScaleRoIAlign
 from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
 
-from src.model.yolo.yolo import YOLO
+from model.yolo.yolo import YOLO
 
 import torch
 
