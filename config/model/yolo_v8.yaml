@@ -6,9 +6,6 @@ learning_rate: 0.001
 
 phi: 's'  # Scaling factor for YOLO
 
-base_channels: 64
-base_depth: 3
-
 backbone:
   _target_: model.backbone.darknet.DarkNet  # Path to the backbone class
   pretrained: False

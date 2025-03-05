@@ -475,10 +475,13 @@ class Loss:
             loss[0], loss[2] = self.bbox_loss(pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores,
                                               target_scores_sum, fg_mask)
 
-        loss[0] *= 7.5  # box gain
-        loss[1] *= 0.5  # cls gain
-        loss[2] *= 1.5  # dfl gain
-        return loss.sum() # loss(box, cls, dfl) # * batch_size
+        return (
+            loss[0] * 7.5,  # Box loss
+            loss[1] * 0.5,  # Classification loss
+            loss[2] * 1.5   # DFL loss
+        )
+
+
 
 def is_parallel(model):
     # Returns True if model is of type DP or DDP

@@ -16,20 +16,21 @@ num_workers: 1
 train_ratio: 0.7
 test_ratio: 0.2
 eval_ratio: 0.1
+
 transform:
   train:
     - _target_: torchvision.transforms.Resize
-      size: [256, 256]
+      size: [640, 640]
     - _target_: torchvision.transforms.RandomHorizontalFlip
       p: 0.5
     - _target_: torchvision.transforms.ToTensor
 
   test:
     - _target_: torchvision.transforms.Resize
-      size: [256, 256]
+      size: [640, 640]
     - _target_: torchvision.transforms.ToTensor
 
   eval:
     - _target_: torchvision.transforms.Resize
-      size: [256, 256]
+      size: [640, 640]
     - _target_: torchvision.transforms.ToTensor

@@ -77,7 +77,7 @@ class YoloCOCODataset(Dataset):
         labels = []
         for ann in anns:
             x, y, w, h = ann["bbox"]
-            boxes.append([x, y, x + w, y + h])
+            boxes.append([x, y, x + w, y + h])  # Convert to [x_min, y_min, x_max, y_max]
             labels.append(ann["category_id"])
 
         boxes = np.array(boxes, dtype=np.float32)
@@ -94,7 +94,7 @@ class YoloCOCODataset(Dataset):
             boxes[:, [0, 2]] *= scale_x  # Scale x-coordinates
             boxes[:, [1, 3]] *= scale_y  # Scale y-coordinates
 
-        # Convert to YOLO format
+        # Augmentasi Mosaic dan MixUp
         if self.mosaic and self.rand() < self.mosaic_prob and self.epoch_now < self.epoch_length * self.special_aug_ratio:
             lines = sample(self.image_ids, 3)
             lines.append(image_id)
@@ -108,20 +108,25 @@ class YoloCOCODataset(Dataset):
         else:
             image, box = self.get_random_data(image_id, self.input_shape, random=self.train)
 
+        # Preprocess image
         image = np.transpose(preprocess_input(np.array(image, dtype=np.float32)), (2, 0, 1))
         box = np.array(box, dtype=np.float32)
 
         # Prepare labels_out
         nL = len(box)
-        labels_out = np.zeros((nL, 6))
+        labels_out = np.zeros((nL, 6), dtype=np.float32)
         if nL:
-            box[:, [0, 2]] = box[:, [0, 2]] / self.input_shape[1]
-            box[:, [1, 3]] = box[:, [1, 3]] / self.input_shape[0]
-            box[:, 2:4] = box[:, 2:4] - box[:, 0:2]
-            box[:, 0:2] = box[:, 0:2] + box[:, 2:4] / 2
+            box[:, [0, 2]] = box[:, [0, 2]] / self.input_shape[1]  # Normalize x-coordinates
+            box[:, [1, 3]] = box[:, [1, 3]] / self.input_shape[0]  # Normalize y-coordinates
+            box[:, 2:4] = box[:, 2:4] - box[:, 0:2]               # Calculate width and height
+            box[:, 0:2] = box[:, 0:2] + box[:, 2:4] / 2           # Calculate center coordinates
 
-            labels_out[:, 1] = box[:, -1]
-            labels_out[:, 2:] = box[:, :4]
+            labels_out[:, 1] = box[:, -1]                         # Class ID
+            labels_out[:, 2:] = box[:, :4]                        # Bounding box coordinates
+
+        # Convert to PyTorch tensors
+        image = torch.from_numpy(image).type(torch.FloatTensor)
+        labels_out = torch.from_numpy(labels_out).type(torch.FloatTensor)
 
         return image, labels_out
 
@@ -362,14 +367,19 @@ class YoloCOCODataset(Dataset):
 
 
 # DataLoader中collate_fn使用
-def yolo_dataset_collate(batch):
-    images = []
-    bboxes = []
-    for i, (img, box) in enumerate(batch):
-        images.append(img)
-        box[:, 0] = i
-        bboxes.append(box)
+def yolo_collate_fn(batch):
+    """
+    Collate function for YoloCOCODataset.
+    Args:
+        batch: List of tuples (image, targets).
+    Returns:
+        images: Stacked tensor of shape (batch_size, C, H, W).
+        targets: List of dictionaries containing boxes and labels.
+    """
+    images = [item[0] for item in batch]
+    targets = [item[1] for item in batch]
 
-    images = torch.from_numpy(np.array(images)).type(torch.FloatTensor)
-    bboxes = torch.from_numpy(np.concatenate(bboxes, 0)).type(torch.FloatTensor)
-    return images, bboxes
+    # Stack images into a single tensor
+    images = torch.stack(images, dim=0)
+
+    return images, targets

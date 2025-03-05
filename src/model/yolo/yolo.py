@@ -57,7 +57,14 @@ class YOLO(nn.Module):
         if self.training:
             # Compute the loss
             loss_dict = self.loss(features, targets)
-            return loss_dict
+
+            # Format dictionary untuk memberikan nama yang lebih jelas pada setiap loss
+            return {
+                "loss_box": loss_dict[0],  # Box regression loss
+                "loss_cls": loss_dict[1],  # Classification loss
+                "loss_dfl": loss_dict[2],  # Distribution Focal Loss (DFL)
+            }
+
         else:
             # For inference, return the detections
             detections = self.postprocess(features, images[0].shape[-2:])

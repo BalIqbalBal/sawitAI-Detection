@@ -64,11 +64,11 @@ class YoloBody(nn.Module):
 
         dep_mul, wid_mul, deep_mul = depth_dict[cfg.phi], width_dict[cfg.phi], deep_width_dict[cfg.phi]
 
-        base_channels = int(wid_mul * cfg.base_channels)
-        base_depth = max(round(dep_mul * cfg.base_depth), 1)
+        base_channels = int(wid_mul * 64)
+        base_depth = max(round(dep_mul * 3), 1)
 
         # Initialize backbone (dynamically instantiated by Hydra)
-        self.backbone = instantiate(cfg.backbone,base_channels=base_channels, base_depth=base_depth, deep_mul=dep_mul, phi=cfg.phi)
+        self.backbone = instantiate(cfg.backbone,base_channels=base_channels, base_depth=base_depth, deep_mul=deep_mul, phi=cfg.phi)
         
 
         # Initialize other components
