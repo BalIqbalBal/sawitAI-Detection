@@ -87,12 +87,8 @@ def train(cfg: DictConfig):
             with tqdm(train_dataloader, desc=f"Epoch [{epoch+1}/{cfg.model.epochs}]") as pbar:
                 for batch_idx, (images, targets) in enumerate(pbar):
                     
-                    if cfg.model.model_type == "YOLO":
-                        images = images.to(device)
-                        targets = targets.to(device)
-                    else:
-                        images = images.to(device)
-                        targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
+                    images = list(img.to(device) for img in images)
+                    targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
 
                     # Forward pass
                     loss_dict = model(images, targets)

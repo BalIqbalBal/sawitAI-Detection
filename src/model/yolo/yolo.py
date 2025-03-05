@@ -33,10 +33,10 @@ class YOLO(nn.Module):
         self.bbox_util = DecodeBox(self.num_classes, self.input_shape)
 
     def forward(
-        self, 
-        images: List[torch.Tensor], 
-        targets: Optional[List[Dict[str, torch.Tensor]]] = None
-    ) -> Tuple[Dict[str, torch.Tensor], List[Dict[str, torch.Tensor]]]:
+                self, 
+                images: List[torch.Tensor], 
+                targets: Optional[List[Dict[str, torch.Tensor]]] = None
+            ) -> Tuple[Dict[str, torch.Tensor], List[Dict[str, torch.Tensor]]]:
         """
         Args:
             images (list[Tensor]): images to be processed
@@ -50,15 +50,29 @@ class YOLO(nn.Module):
         """
         if self.training and targets is None:
             raise ValueError("In training mode, targets should be passed")
+        
+        # Convert targets to YOLO format [batch_index, class_id, center_x, center_y, width, height]
+        yolo_targets = []
+        for batch_idx, target in enumerate(targets):
+            boxes = target["boxes"]  # Boxes in xyxy format, shape (N, 4)
+            labels = target["labels"]  # Class labels, shape (N,)
+            image_height, image_width = images[batch_idx].shape[-2:]  # Get image dimensions
+
+            # Convert to YOLO format
+            yolo_boxes = self.convert_xyxy_to_yolo_format(boxes, labels, batch_idx, image_width, image_height)
+            yolo_targets.append(yolo_boxes)
+
+        # Concatenate all targets into a single tensor of shape (N_total, 6)
+        yolo_targets = torch.cat(yolo_targets, dim=0)
 
         # Get the features from the backbone
         features = self.model(images)
 
         if self.training:
             # Compute the loss
-            loss_dict = self.loss(features, targets)
+            loss_dict = self.loss(features, yolo_targets)
 
-            # Format dictionary untuk memberikan nama yang lebih jelas pada setiap loss
+            # Format dictionary to provide clear names for each loss
             return {
                 "loss_box": loss_dict[0],  # Box regression loss
                 "loss_cls": loss_dict[1],  # Classification loss
@@ -139,3 +153,50 @@ class YOLO(nn.Module):
         """Set the model to evaluation mode."""
         super(YOLO, self).eval()
         self.model.eval()
+    
+    def convert_xyxy_to_yolo_format(
+            self, 
+            boxes: torch.Tensor, 
+            labels: torch.Tensor, 
+            batch_index: int, 
+            image_width: int, 
+            image_height: int
+        ) -> torch.Tensor:
+        """
+        Convert bounding boxes from xyxy format to YOLO format:
+        [batch_index, class_id, center_x, center_y, width, height], normalized by image dimensions.
+
+        Args:
+            boxes (torch.Tensor): Bounding boxes in xyxy format, shape (N, 4).
+            labels (torch.Tensor): Class labels for each box, shape (N,).
+            batch_index (int): Index of the current batch.
+            image_width (int): Width of the image.
+            image_height (int): Height of the image.
+
+        Returns:
+            yolo_boxes (torch.Tensor): Bounding boxes in YOLO format, shape (N, 6).
+        """
+        # Calculate center coordinates, width, and height
+        center_x = (boxes[:, 0] + boxes[:, 2]) / 2.0
+        center_y = (boxes[:, 1] + boxes[:, 3]) / 2.0
+        width = boxes[:, 2] - boxes[:, 0]
+        height = boxes[:, 3] - boxes[:, 1]
+
+        # Normalize by image dimensions
+        center_x /= image_width
+        center_y /= image_height
+        width /= image_width
+        height /= image_height
+
+        # Add batch index and class labels
+        batch_indices = torch.full_like(labels, batch_index, dtype=torch.float32)  # Shape: (N,)
+        yolo_boxes = torch.stack([
+            batch_indices,  # batch_index
+            labels.float(),  # class_id
+            center_x,  # center_x
+            center_y,  # center_y
+            width,  # width
+            height,  # height
+        ], dim=1)  # Shape: (N, 6)
+
+        return yolo_boxes

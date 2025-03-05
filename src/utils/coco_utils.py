@@ -5,6 +5,7 @@ from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 from collections import defaultdict
 import seaborn as sns
+import torch
 
 def compute_confusion_matrix(coco_gt, coco_dt, iou_threshold=0.5):
     """
@@ -228,10 +229,15 @@ def convert_to_coco_format(predictions, targets, image_ids):
     coco_gt = {"images": [], "annotations": [], "categories": []}
     coco_dt = []
 
+    # Ensure targets is a list of dictionaries
+    if isinstance(targets, torch.Tensor):
+        # Convert tensor to list of dictionaries if necessary
+        targets = [{"boxes": targets[:, :4], "labels": targets[:, 4]}]
+
     # Pastikan targets memiliki category_id dengan mengambilnya dari 'labels'
     category_ids = set()
     for target in targets:
-        if "labels" in target:
+        if isinstance(target, dict) and "labels" in target:
             category_ids.update(target["labels"].tolist())
 
     category_map = {cat: i for i, cat in enumerate(sorted(category_ids))}
@@ -248,7 +254,7 @@ def convert_to_coco_format(predictions, targets, image_ids):
         })
 
         # Konversi ground truth dari 'boxes' dan 'labels'
-        if "boxes" in target and "labels" in target:
+        if isinstance(target, dict) and "boxes" in target and "labels" in target:
             for box, label in zip(target["boxes"], target["labels"]):
                 x, y, w, h = box[0].item(), box[1].item(), (box[2] - box[0]).item(), (box[3] - box[1]).item()
                 coco_gt["annotations"].append({
@@ -264,7 +270,7 @@ def convert_to_coco_format(predictions, targets, image_ids):
         # Konversi prediksi ke COCO format
         if i < len(predictions):
             pred = predictions[i]
-            if "boxes" in pred and "labels" in pred and "scores" in pred:
+            if isinstance(pred, dict) and "boxes" in pred and "labels" in pred and "scores" in pred:
                 for box, score, label in zip(pred["boxes"], pred["scores"], pred["labels"]):
                     x, y, w, h = box[0].item(), box[1].item(), (box[2] - box[0]).item(), (box[3] - box[1]).item()
                     coco_dt.append({

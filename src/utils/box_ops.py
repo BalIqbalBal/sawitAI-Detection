@@ -26,7 +26,7 @@ class DecodeBox():
         # cls   batch_size, 20, 8400
         dbox, cls, origin_cls, anchors, strides = inputs
         # 获得中心宽高坐标
-        dbox    = dist2bbox(dbox, anchors.unsqueeze(0), xywh=True, dim=1) * strides
+        dbox    = dist2bbox(dbox, anchors.unsqueeze(0), xywh=False, dim=1) * strides
         y       = torch.cat((dbox, cls.sigmoid()), 1).permute(0, 2, 1)
         # 进行归一化，到0~1之间
         y[:, :, :4] = y[:, :, :4] / torch.Tensor([self.input_shape[1], self.input_shape[0], self.input_shape[1], self.input_shape[0]]).to(y.device)
@@ -148,7 +148,7 @@ class DecodeBox():
                 output[i][:, :4]    = self.yolo_correct_boxes(box_xy, box_wh, input_shape, image_shape, letterbox_image)
         return output
 
-def dist2bbox(distance, anchor_points, xywh=True, dim=-1):
+def dist2bbox(distance, anchor_points, xywh=False, dim=-1):
     """Transform distance(ltrb) to box(xywh or xyxy)."""
     lt, rb = distance.chunk(2, dim)
     x1y1 = anchor_points - lt

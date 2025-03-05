@@ -148,7 +148,6 @@ def get_dataloader(cfg, dataset):
     Returns:
         DataLoader: DataLoader for the dataset.
     """
-    collate_fn = yolo_collate_fn if cfg.dataset.name == "YoloCOCODataset" else collate_fn
     return DataLoader(
         dataset,
         batch_size=cfg.dataset.batch_size,

@@ -60,6 +60,14 @@ class YoloCOCODataset(Dataset):
         return self.length
 
     def __getitem__(self, index):
+        """
+        Args:
+            index (int): Index of the image to retrieve.
+
+        Returns:
+            image (torch.Tensor): The image as a tensor.
+            target (dict): A dictionary containing annotations (bboxes in xyxy format, labels, etc.).
+        """
         index = index % self.length
         image_id = self.image_ids[index]
 
@@ -77,7 +85,7 @@ class YoloCOCODataset(Dataset):
         labels = []
         for ann in anns:
             x, y, w, h = ann["bbox"]
-            boxes.append([x, y, x + w, y + h])  # Convert to [x_min, y_min, x_max, y_max]
+            boxes.append([x, y, x + w, y + h])  # Keep in xyxy format
             labels.append(ann["category_id"])
 
         boxes = np.array(boxes, dtype=np.float32)
@@ -94,41 +102,36 @@ class YoloCOCODataset(Dataset):
             boxes[:, [0, 2]] *= scale_x  # Scale x-coordinates
             boxes[:, [1, 3]] *= scale_y  # Scale y-coordinates
 
-        # Augmentasi Mosaic dan MixUp
+        # Apply Mosaic and MixUp augmentations
         if self.mosaic and self.rand() < self.mosaic_prob and self.epoch_now < self.epoch_length * self.special_aug_ratio:
-            lines = sample(self.image_ids, 3)
-            lines.append(image_id)
-            shuffle(lines)
-            image, box = self.get_random_data_with_Mosaic(lines, self.input_shape)
+            # Sample 3 additional images for Mosaic
+            mosaic_ids = sample(self.image_ids, 3)
+            mosaic_ids.append(image_id)
+            shuffle(mosaic_ids)
 
+            # Apply Mosaic augmentation
+            image, boxes, labels = self.get_random_data_with_Mosaic(mosaic_ids, self.input_shape)
+
+            # Apply MixUp augmentation (if enabled)
             if self.mixup and self.rand() < self.mixup_prob:
-                lines = sample(self.image_ids, 1)
-                image_2, box_2 = self.get_random_data(lines[0], self.input_shape, random=self.train)
-                image, box = self.get_random_data_with_MixUp(image, box, image_2, box_2)
+                mixup_id = sample(self.image_ids, 1)[0]
+                mixup_image, mixup_boxes, mixup_labels = self.get_random_data(mixup_id, self.input_shape, random=self.train)
+                image, boxes, labels = self.get_random_data_with_MixUp(image, boxes, labels, mixup_image, mixup_boxes, mixup_labels)
         else:
-            image, box = self.get_random_data(image_id, self.input_shape, random=self.train)
+            # Apply standard augmentation
+            image, boxes, labels = self.get_random_data(image_id, self.input_shape, random=self.train)
 
-        # Preprocess image
+        # Prepare target dictionary (keep boxes in xyxy format)
+        target = {
+            "boxes": torch.as_tensor(boxes, dtype=torch.float32),  # Boxes in xyxy format
+            "labels": torch.as_tensor(labels, dtype=torch.int64),  # Class labels
+        }
+
+        # Convert image to tensor and normalize
         image = np.transpose(preprocess_input(np.array(image, dtype=np.float32)), (2, 0, 1))
-        box = np.array(box, dtype=np.float32)
-
-        # Prepare labels_out
-        nL = len(box)
-        labels_out = np.zeros((nL, 6), dtype=np.float32)
-        if nL:
-            box[:, [0, 2]] = box[:, [0, 2]] / self.input_shape[1]  # Normalize x-coordinates
-            box[:, [1, 3]] = box[:, [1, 3]] / self.input_shape[0]  # Normalize y-coordinates
-            box[:, 2:4] = box[:, 2:4] - box[:, 0:2]               # Calculate width and height
-            box[:, 0:2] = box[:, 0:2] + box[:, 2:4] / 2           # Calculate center coordinates
-
-            labels_out[:, 1] = box[:, -1]                         # Class ID
-            labels_out[:, 2:] = box[:, :4]                        # Bounding box coordinates
-
-        # Convert to PyTorch tensors
         image = torch.from_numpy(image).type(torch.FloatTensor)
-        labels_out = torch.from_numpy(labels_out).type(torch.FloatTensor)
 
-        return image, labels_out
+        return image, target
 
     def rand(self, a=0, b=1):
         return np.random.rand() * (b - a) + a
