@@ -72,7 +72,7 @@ class YoloCOCODataset(Dataset):
         labels = []
         for ann in anns:
             x, y, w, h = ann["bbox"]
-            boxes.append([x, y, x + w, y + h])
+            boxes.append([x, y, w, h])
             labels.append(ann["category_id"])
 
         boxes = np.array(boxes, dtype=np.float32)
@@ -85,16 +85,17 @@ class YoloCOCODataset(Dataset):
             new_h, new_w = image.shape[1:]  # Transformed image dimensions
             scale_x = new_w / orig_w
             scale_y = new_h / orig_h
-            boxes[:, [0, 2]] *= scale_x  # Scale x-coordinates
-            boxes[:, [1, 3]] *= scale_y  # Scale y-coordinates
-
+            boxes[:, 0] *= scale_x  # x
+            boxes[:, 1] *= scale_y  # y
+            boxes[:, 2] *= scale_x  # width
+            boxes[:, 3] *= scale_y  # height
 
         # Apply Mosaic and MixUp augmentations
         if self.mosaic and np.random.rand() < self.mosaic_prob and self.epoch_now < self.epoch_length * self.special_aug_ratio:
             mosaic_ids = sample(self.image_ids, 3)
             mosaic_ids.append(image_id)
             shuffle(mosaic_ids)
-            
+             
             image, boxes, labels = self.get_random_data_with_mosaic(mosaic_ids, self.input_shape)
             
             if self.mixup and np.random.rand() < self.mixup_prob:
@@ -134,7 +135,7 @@ class YoloCOCODataset(Dataset):
         boxes = []
         for ann in anns:
             x, y, bw, bh = ann["bbox"]
-            boxes.append([x, y, x + bw, y + bh, ann["category_id"]])
+            boxes.append([x, y, bw, bh, ann["category_id"]])
         boxes = np.array(boxes, dtype=np.float32)
 
         if not random:
@@ -150,14 +151,18 @@ class YoloCOCODataset(Dataset):
             image_data = np.array(new_image, np.float32)
 
             if len(boxes) > 0:
-                boxes[:, [0, 2]] = boxes[:, [0, 2]] * scale + dx
-                boxes[:, [1, 3]] = boxes[:, [1, 3]] * scale + dy
-                boxes[:, 0:2] = np.maximum(boxes[:, 0:2], 0)
-                boxes[:, 2] = np.minimum(boxes[:, 2], w)
-                boxes[:, 3] = np.minimum(boxes[:, 3], h)
-                box_w = boxes[:, 2] - boxes[:, 0]
-                box_h = boxes[:, 3] - boxes[:, 1]
-                boxes = boxes[np.logical_and(box_w > 1, box_h > 1)]
+                boxes[:, 0] = boxes[:, 0] * scale + dx
+                boxes[:, 1] = boxes[:, 1] * scale + dy
+                boxes[:, 2] = boxes[:, 2] * scale
+                boxes[:, 3] = boxes[:, 3] * scale
+
+                boxes[:, 0] = np.maximum(boxes[:, 0], 0)
+                boxes[:, 1] = np.maximum(boxes[:, 1], 0)
+                boxes[:, 0] = np.minimum(boxes[:, 0], w - boxes[:, 2])
+                boxes[:, 1] = np.minimum(boxes[:, 1], h - boxes[:, 3])
+
+                valid_mask = np.logical_and(boxes[:, 2] > 1, boxes[:, 3] > 1)
+                boxes = boxes[valid_mask]
 
             return image_data, boxes[:, :4], boxes[:, 4].astype(np.int64)
 
@@ -180,7 +185,7 @@ class YoloCOCODataset(Dataset):
         # Flip
         if self.rand() < 0.5:
             new_image = new_image.transpose(Image.FLIP_LEFT_RIGHT)
-            boxes[:, [0, 2]] = w - boxes[:, [2, 0]]
+            boxes[:, 0] = w - (boxes[:, 0] + boxes[:, 2])
 
         # HSV augmentation
         image_data = np.array(new_image, np.uint8)
@@ -194,14 +199,18 @@ class YoloCOCODataset(Dataset):
         image_data = cv2.cvtColor(image_data, cv2.COLOR_HSV2RGB)
 
         # Adjust boxes
-        boxes[:, [0, 2]] = boxes[:, [0, 2]] * nw / iw + dx
-        boxes[:, [1, 3]] = boxes[:, [1, 3]] * nh / ih + dy
-        boxes[:, 0:2] = np.maximum(boxes[:, 0:2], 0)
-        boxes[:, 2] = np.minimum(boxes[:, 2], w)
-        boxes[:, 3] = np.minimum(boxes[:, 3], h)
-        box_w = boxes[:, 2] - boxes[:, 0]
-        box_h = boxes[:, 3] - boxes[:, 1]
-        boxes = boxes[np.logical_and(box_w > 1, box_h > 1)]
+        boxes[:, 0] = boxes[:, 0] * nw / iw + dx
+        boxes[:, 1] = boxes[:, 1] * nh / ih + dy
+        boxes[:, 2] = boxes[:, 2] * nw / iw
+        boxes[:, 3] = boxes[:, 3] * nh / ih
+
+        boxes[:, 0] = np.maximum(boxes[:, 0], 0)
+        boxes[:, 1] = np.maximum(boxes[:, 1], 0)
+        boxes[:, 0] = np.minimum(boxes[:, 0], w - boxes[:, 2])
+        boxes[:, 1] = np.minimum(boxes[:, 1], h - boxes[:, 3])
+
+        valid_mask = np.logical_and(boxes[:, 2] > 1, boxes[:, 3] > 1)
+        boxes = boxes[valid_mask]
 
         return image_data, boxes[:, :4], boxes[:, 4].astype(np.int64)
 
@@ -235,22 +244,25 @@ class YoloCOCODataset(Dataset):
                 continue
             boxes = box_datas[i].copy()
             labels = label_datas[i].copy()
-            
-            if i == 0:
-                boxes[:, 2] = np.minimum(boxes[:, 2], cutx)
-                boxes[:, 3] = np.minimum(boxes[:, 3], cuty)
-            elif i == 1:
+             
+            if i == 0:  # Top-left
+                boxes[:, 2] = np.minimum(boxes[:, 2], cutx - boxes[:, 0])
+                boxes[:, 3] = np.minimum(boxes[:, 3], cuty - boxes[:, 1])
+            elif i == 1:  # Top-right
                 boxes[:, 0] = np.maximum(boxes[:, 0], cutx)
-                boxes[:, 3] = np.minimum(boxes[:, 3], cuty)
-            elif i == 2:
-                boxes[:, 2] = np.minimum(boxes[:, 2], cutx)
-                boxes[:, 0] = np.maximum(boxes[:, 0], cuty)
-            elif i == 3:
+                boxes[:, 2] = np.minimum(boxes[:, 2], w - boxes[:, 0])
+                boxes[:, 3] = np.minimum(boxes[:, 3], cuty - boxes[:, 1])
+            elif i == 2:  # Bottom-left
+                boxes[:, 1] = np.maximum(boxes[:, 1], cuty)
+                boxes[:, 2] = np.minimum(boxes[:, 2], cutx - boxes[:, 0])
+                boxes[:, 3] = np.minimum(boxes[:, 3], h - boxes[:, 1])
+            elif i == 3:  # Bottom-right
                 boxes[:, 0] = np.maximum(boxes[:, 0], cutx)
                 boxes[:, 1] = np.maximum(boxes[:, 1], cuty)
+                boxes[:, 2] = np.minimum(boxes[:, 2], w - boxes[:, 0])
+                boxes[:, 3] = np.minimum(boxes[:, 3], h - boxes[:, 1])
 
-            valid_mask = np.logical_and((boxes[:, 2] - boxes[:, 0]) > 1, 
-                                       (boxes[:, 3] - boxes[:, 1]) > 1)
+            valid_mask = np.logical_and(boxes[:, 2] > 1, boxes[:, 3] > 1)
             boxes = boxes[valid_mask]
             labels = labels[valid_mask]
             
@@ -259,7 +271,6 @@ class YoloCOCODataset(Dataset):
                 new_labels.append(labels)
 
         if len(new_boxes) == 0:
-        # Return empty 2D arrays instead of 1D
             return new_image, np.empty((0, 4), dtype=np.float32), np.empty((0,), dtype=np.int64)
         
         new_boxes = np.concatenate(new_boxes, axis=0)

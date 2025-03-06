@@ -17,21 +17,30 @@ def evaluate_model(model, dataloader, device):
     all_predictions = []
     all_targets = []
     image_ids = []
+    image_size = None
     
     with torch.no_grad():
-        # Add tqdm progress bar for evaluation
         with tqdm(dataloader, desc="Evaluating") as pbar:
             for i, (images, targets) in enumerate(pbar):
                 images = images.to(device)
                 outputs = model(images)
+
+                if image_size is None:  # Only capture size once
+                        c, h, w = images[0].shape  # Get dimensions from the first image in the batch
+                        image_size = (w, h)  # (width, height)
                 
                 # Store predictions and targets
                 all_predictions.extend(outputs)
                 all_targets.extend(targets)
                 image_ids.extend(range(i * len(images), (i + 1) * len(images)))
     
-    # Convert to COCO format and evaluate
-    coco_gt, coco_dt = convert_to_coco_format(all_predictions, all_targets, image_ids)
+    # Convert to COCO format with image sizes
+    coco_gt, coco_dt = convert_to_coco_format(
+        all_predictions,
+        all_targets,
+        image_ids,
+        image_size  # Pass image sizes here
+    )
     metrics, pr_curves, confusion_matrix_file = evaluate_detections(coco_gt, coco_dt)
     
     return metrics, pr_curves, confusion_matrix_file
@@ -85,15 +94,31 @@ def train(cfg: DictConfig):
             
             # Use tqdm for progress bar
             with tqdm(train_dataloader, desc=f"Epoch [{epoch+1}/{cfg.model.epochs}]") as pbar:
+
+                all_predictions = []
+                all_targets = []
+                image_ids = []
+                image_size = None
+    
                 for batch_idx, (images, targets) in enumerate(pbar):
                     
                     images = images.to(device)
                     targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
 
                     # Forward pass
-                    loss_dict = model(images, targets)
+                    outputs, loss_dict = model(images, targets)
+
+                    if image_size is None:  # Only capture size once
+                        c, h, w = images[0].shape  # Get dimensions from the first image in the batch
+                        image_size = (w, h)  # (width, height)
+                        
                     loss = sum(loss for loss in loss_dict.values())/cfg.dataset.batch_size
                     epoch_loss += loss.item()
+
+                    # Store predictions and targets
+                    all_predictions.extend(outputs)
+                    all_targets.extend(targets)
+                    image_ids.extend(range(batch_idx * len(images), (batch_idx + 1) * len(images)))
 
                     # Backward pass
                     optimizer.zero_grad()
@@ -110,8 +135,15 @@ def train(cfg: DictConfig):
             avg_epoch_loss = epoch_loss / len(train_dataloader)
             mlflow.log_metric("avg_train_loss", avg_epoch_loss, step=epoch)
 
-            # Evaluate on the train dataset after each epoch
-            metrics, pr_curves, confusion_matrix_file = evaluate_model(model, train_dataloader, device)
+            #compute metric for training
+            # Convert to COCO format with image sizes
+            coco_gt, coco_dt = convert_to_coco_format(
+                all_predictions,
+                all_targets,
+                image_ids,
+                image_size  # Pass image sizes here
+            )
+            metrics, pr_curves, confusion_matrix_file = evaluate_detections(coco_gt, coco_dt)
 
             # Log evaluation metrics
             mlflow.log_metrics({
