@@ -7,43 +7,40 @@ import numpy as np
 import mlflow
 import mlflow.pytorch
 from tqdm import tqdm
+from pathlib import Path
 from model.model_factory import get_model
 from dataset.data_factory import get_dataset, get_dataloader
 from utils.utils import save_model
-from utils.coco_utils import convert_to_coco_format, evaluate_detections, plot_precision_recall_curve
+from utils.metrics import DetMetrics  
 
-def evaluate_model(model, dataloader, device):
+def evaluate_model(model, dataloader, device, det_metrics):
+    """
+    Evaluate the model using DetMetrics.
+    """
     model.eval()
-    all_predictions = []
-    all_targets = []
-    image_ids = []
-    image_size = None
-    
+    det_metrics.reset()  # Reset metrics for a new evaluation
+
     with torch.no_grad():
         with tqdm(dataloader, desc="Evaluating") as pbar:
             for i, (images, targets) in enumerate(pbar):
                 images = images.to(device)
                 outputs = model(images)
 
-                if image_size is None:  # Only capture size once
-                        c, h, w = images[0].shape  # Get dimensions from the first image in the batch
-                        image_size = (w, h)  # (width, height)
-                
-                # Store predictions and targets
-                all_predictions.extend(outputs)
-                all_targets.extend(targets)
-                image_ids.extend(range(i * len(images), (i + 1) * len(images)))
-    
-    # Convert to COCO format with image sizes
-    coco_gt, coco_dt = convert_to_coco_format(
-        all_predictions,
-        all_targets,
-        image_ids,
-        image_size  # Pass image sizes here
-    )
-    metrics, pr_curves, confusion_matrix_file = evaluate_detections(coco_gt, coco_dt)
-    
-    return metrics, pr_curves, confusion_matrix_file
+                # Convert model outputs to DetMetrics format
+                pred_boxes = outputs['boxes'].cpu().numpy()
+                pred_scores = outputs['scores'].cpu().numpy()
+                pred_labels = outputs['labels'].cpu().numpy()
+
+                # Convert ground truth to DetMetrics format
+                gt_boxes = [t['boxes'].cpu().numpy() for t in targets]
+                gt_labels = [t['labels'].cpu().numpy() for t in targets]
+
+                # Update DetMetrics with predictions and ground truth
+                det_metrics.process(pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels)
+
+    # Compute and return metrics
+    metrics = det_metrics.results_dict
+    return metrics
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def train(cfg: DictConfig):
@@ -55,6 +52,9 @@ def train(cfg: DictConfig):
     device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
 
     os.makedirs("sementara", exist_ok=True)
+    os.makedirs("results/train", exist_ok=True)
+    os.makedirs("results/eval", exist_ok=True)
+    os.makedirs("results/test", exist_ok=True)
 
     # Dataset and DataLoader (dynamically loaded)
     train_dataset, test_dataset, eval_dataset = get_dataset(cfg)
@@ -69,6 +69,11 @@ def train(cfg: DictConfig):
     # Instantiate the optimizer
     optimizer = instantiate(cfg.model.optimizer, model.parameters(), lr=cfg.model.optimizer.lr)
     print(f"Optimizer: {optimizer}")
+
+    # Initialize DetMetrics for training, evaluation, and testing
+    train_metrics = DetMetrics(save_dir=Path("results/train"), plot=True, names=cfg.dataset.class_names)
+    eval_metrics = DetMetrics(save_dir=Path("results/eval"), plot=True, names=cfg.dataset.class_names)
+    test_metrics = DetMetrics(save_dir=Path("results/test"), plot=True, names=cfg.dataset.class_names)
 
     run_name = f"{cfg.model.name}_{cfg.dataset.name}_lr{cfg.model.optimizer.lr}_bs{cfg.dataset.batch_size}"
 
@@ -88,37 +93,35 @@ def train(cfg: DictConfig):
             model.train()
             epoch_loss = 0
 
+            # Reset metrics for the new epoch
+            train_metrics.reset()
+
             # Update epoch_now for YoloDataset (if applicable)
             if hasattr(train_dataset, "epoch_now"):
                 train_dataset.epoch_now = epoch
             
             # Use tqdm for progress bar
             with tqdm(train_dataloader, desc=f"Epoch [{epoch+1}/{cfg.model.epochs}]") as pbar:
-
-                all_predictions = []
-                all_targets = []
-                image_ids = []
-                image_size = None
-    
                 for batch_idx, (images, targets) in enumerate(pbar):
-                    
                     images = images.to(device)
                     targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
 
                     # Forward pass
                     outputs, loss_dict = model(images, targets)
-
-                    if image_size is None:  # Only capture size once
-                        c, h, w = images[0].shape  # Get dimensions from the first image in the batch
-                        image_size = (w, h)  # (width, height)
-                        
-                    loss = sum(loss for loss in loss_dict.values())/cfg.dataset.batch_size
+                    loss = sum(loss for loss in loss_dict.values()) / cfg.dataset.batch_size
                     epoch_loss += loss.item()
 
-                    # Store predictions and targets
-                    all_predictions.extend(outputs)
-                    all_targets.extend(targets)
-                    image_ids.extend(range(batch_idx * len(images), (batch_idx + 1) * len(images)))
+                    # Convert model outputs to DetMetrics format
+                    pred_boxes = outputs['boxes'].cpu().numpy()
+                    pred_scores = outputs['scores'].cpu().numpy()
+                    pred_labels = outputs['labels'].cpu().numpy()
+
+                    # Convert ground truth to DetMetrics format
+                    gt_boxes = [t['boxes'].cpu().numpy() for t in targets]
+                    gt_labels = [t['labels'].cpu().numpy() for t in targets]
+
+                    # Update DetMetrics with predictions and ground truth
+                    train_metrics.process(pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels)
 
                     # Backward pass
                     optimizer.zero_grad()
@@ -135,97 +138,59 @@ def train(cfg: DictConfig):
             avg_epoch_loss = epoch_loss / len(train_dataloader)
             mlflow.log_metric("avg_train_loss", avg_epoch_loss, step=epoch)
 
-            #compute metric for training
-            # Convert to COCO format with image sizes
-            coco_gt, coco_dt = convert_to_coco_format(
-                all_predictions,
-                all_targets,
-                image_ids,
-                image_size  # Pass image sizes here
-            )
-            metrics, pr_curves, confusion_matrix_file = evaluate_detections(coco_gt, coco_dt)
-
-            # Log evaluation metrics
+            # Log training metrics
+            train_metrics_results = train_metrics.results_dict
             mlflow.log_metrics({
-                "train_mAP": metrics["mAP"],
-                "train_AP50": metrics["AP50"],
-                "train_AP75": metrics["AP75"],
-                "train_AP_small": metrics["AP_small"],
-                "train_AP_medium": metrics["AP_medium"],
-                "train_AP_large": metrics["AP_large"],
-                "train_AR_max1": metrics["AR_max1"],
-                "train_AR_max10": metrics["AR_max10"],
-                "train_AR_max100": metrics["AR_max100"],
+                "train_mAP": train_metrics_results["metrics/mAP50-95(B)"],
+                "train_AP50": train_metrics_results["metrics/mAP50(B)"],
+                "train_precision": train_metrics_results["metrics/precision(B)"],
+                "train_recall": train_metrics_results["metrics/recall(B)"],
             }, step=epoch)
 
-            # Plot and log precision-recall curves
-            for cat_id, (recalls, precisions) in pr_curves.items():
-                ap = np.mean(precisions)
-                filename = f"sementara/train_pr_curve_cat{cat_id}_epoch{epoch}.png"
-                plot_precision_recall_curve(precisions, recalls, ap, filename)
-                mlflow.log_artifact(filename)
-        
-            # Evaluate on the eval dataset after each epoch
-            metrics, pr_curves, confusion_matrix_file = evaluate_model(model, eval_dataloader, device)
+            # Log training curves (e.g., precision-recall curves)
+            train_metrics.log_curves_to_mlflow(prefix="train_")
+
+            # Evaluate on the eval dataset
+            eval_metrics.reset()  # Reset metrics for evaluation dataset
+            eval_metrics = evaluate_model(model, eval_dataloader, device, eval_metrics)
             
             # Log evaluation metrics
             mlflow.log_metrics({
-                "eval_mAP": metrics["mAP"],
-                "eval_AP50": metrics["AP50"],
-                "eval_AP75": metrics["AP75"],
-                "eval_AP_small": metrics["AP_small"],
-                "eval_AP_medium": metrics["AP_medium"],
-                "eval_AP_large": metrics["AP_large"],
-                "eval_AR_max1": metrics["AR_max1"],
-                "eval_AR_max10": metrics["AR_max10"],
-                "eval_AR_max100": metrics["AR_max100"],
+                "eval_mAP": eval_metrics["metrics/mAP50-95(B)"],
+                "eval_AP50": eval_metrics["metrics/mAP50(B)"],
+                "eval_precision": eval_metrics["metrics/precision(B)"],
+                "eval_recall": eval_metrics["metrics/recall(B)"],
             }, step=epoch)
             
-            # Plot and log precision-recall curves
-            for cat_id, (recalls, precisions) in pr_curves.items():
-                ap = np.mean(precisions)
-                filename = f"sementara/val_pr_curve_cat{cat_id}_epoch{epoch}.png"
-                plot_precision_recall_curve(precisions, recalls, ap, filename)
-                mlflow.log_artifact(filename)
-            
-            # Log confusion matrix
-            mlflow.log_artifact(confusion_matrix_file, f"val_confusion_matrix_epoch{epoch}.png")
-            
-            print(f"Epoch [{epoch+1}/{cfg.model.epochs}], Eval mAP: {metrics['mAP']:.4f}, AP50: {metrics['AP50']:.4f}, AP75: {metrics['AP75']:.4f}")
+            # Log evaluation curves (e.g., precision-recall curves)
+            eval_metrics.log_curves_to_mlflow(prefix="eval_")
+
+            print(f"Epoch [{epoch+1}/{cfg.model.epochs}], "
+                  f"Train mAP: {train_metrics_results['metrics/mAP50-95(B)']:.4f}, "
+                  f"Eval mAP: {eval_metrics['metrics/mAP50-95(B)']:.4f}")
 
         # Test the model on the test dataset after training
-        metrics, pr_curves, confusion_matrix_file = evaluate_model(model, test_dataloader, device)
+        test_metrics.reset()  # Reset metrics for test dataset
+        test_metrics = evaluate_model(model, test_dataloader, device, test_metrics)
         
         # Log test metrics
         mlflow.log_metrics({
-            "test_mAP": metrics["mAP"],
-            "test_AP50": metrics["AP50"],
-            "test_AP75": metrics["AP75"],
-            "test_AP_small": metrics["AP_small"],
-            "test_AP_medium": metrics["AP_medium"],
-            "test_AP_large": metrics["AP_large"],
-            "test_AR_max1": metrics["AR_max1"],
-            "test_AR_max10": metrics["AR_max10"],
-            "test_AR_max100": metrics["AR_max100"],
+            "test_mAP": test_metrics["metrics/mAP50-95(B)"],
+            "test_AP50": test_metrics["metrics/mAP50(B)"],
+            "test_precision": test_metrics["metrics/precision(B)"],
+            "test_recall": test_metrics["metrics/recall(B)"],
         })
         
-        # Plot and log test precision-recall curves
-        for cat_id, (recalls, precisions) in pr_curves.items():
-            ap = np.mean(precisions)
-            filename = f"sementara/test_pr_curve_cat{cat_id}.png"
-            plot_precision_recall_curve(precisions, recalls, ap, filename)
-            mlflow.log_artifact(filename)
-        
-        # Log final test confusion matrix
-        mlflow.log_artifact(confusion_matrix_file, "test_confusion_matrix.png")
-        
-        print(f"Test mAP: {metrics['mAP']:.4f}, AP50: {metrics['AP50']:.4f}, AP75: {metrics['AP75']:.4f}")
+        # Log test curves (e.g., precision-recall curves)
+        test_metrics.log_curves_to_mlflow(prefix="test_")
+
+        print(f"Test mAP: {test_metrics['metrics/mAP50-95(B)']:.4f}, AP50: {test_metrics['metrics/mAP50(B)']:.4f}")
         
         # Save model and log it as an artifact
         save_model(model, "model.pth")
         mlflow.log_artifact("model.pth")
         
-        return metrics["mAP"]
+        return test_metrics["metrics/mAP50-95(B)"]
 
 if __name__ == "__main__":
     train()

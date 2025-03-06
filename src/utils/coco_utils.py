@@ -134,15 +134,39 @@ def evaluate_detections(coco_gt, coco_dt):
     }
     
     pr_curves = {}
-    for cat_id in coco_gt_obj.getCatIds():
-        precisions = coco_eval.eval["precision"][0, :, cat_id, 0, 2]
+    # Get category IDs and their indices
+    cat_ids = coco_gt_obj.getCatIds()
+    
+    pr_curves = {}
+    for i, cat_id in enumerate(cat_ids):  # Use index `i` instead of `cat_id`
+        # Access precision using index `i` (not cat_id)
+        precisions = coco_eval.eval["precision"][0, :, i, 0, 2]  # Fixed index
         recalls = np.arange(0, 1.01, 0.01)
         pr_curves[cat_id] = (recalls, precisions)
-    
+        
     confusion_matrix, category_names = compute_confusion_matrix(coco_gt_obj, coco_dt_obj)
     confusion_matrix_file = plot_confusion_matrix(confusion_matrix, category_names)
     
     return metrics, pr_curves, confusion_matrix_file
+
+def plot_precision_recall_curve(precisions, recalls, ap, filename):
+    """
+    Plot precision-recall curve for a category and save to file.
+    
+    Args:
+        precisions: Array of precision values
+        recalls: Array of recall values
+        ap: Average precision value
+        filename: Output filename for the plot
+    """
+    plt.figure(figsize=(10, 8))
+    plt.plot(recalls, precisions)
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.title(f"Precision-Recall Curve (AP: {ap:.4f})")
+    plt.fill_between(recalls, precisions, alpha=0.2)
+    plt.savefig(filename)
+    plt.close()
 
 def convert_to_coco_format(predictions, targets, image_ids, image_sizes):
     coco_gt = {"images": [], "annotations": [], "categories": []}
