@@ -98,6 +98,7 @@ class YOLO(nn.Module):
         # Decode the raw outputs into bounding boxes, scores, and labels
         outputs = self.bbox_util.decode_box(features)
 
+
         # Apply Non-Maximum Suppression (NMS)
         results = self.bbox_util.non_max_suppression(
             outputs, 
@@ -155,13 +156,13 @@ class YOLO(nn.Module):
         self.model.eval()
     
     def convert_xyxy_to_yolo_format(
-            self, 
-            boxes: torch.Tensor, 
-            labels: torch.Tensor, 
-            batch_index: int, 
-            image_width: int, 
-            image_height: int
-        ) -> torch.Tensor:
+        self, 
+        boxes: torch.Tensor, 
+        labels: torch.Tensor, 
+        batch_index: int, 
+        image_width: int, 
+        image_height: int
+    ) -> torch.Tensor:
         """
         Convert bounding boxes from xyxy format to YOLO format:
         [batch_index, class_id, center_x, center_y, width, height], normalized by image dimensions.
@@ -190,6 +191,8 @@ class YOLO(nn.Module):
 
         # Add batch index and class labels
         batch_indices = torch.full_like(labels, batch_index, dtype=torch.float32)  # Shape: (N,)
+        
+        # Combine into YOLO format
         yolo_boxes = torch.stack([
             batch_indices,  # batch_index
             labels.float(),  # class_id

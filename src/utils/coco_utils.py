@@ -154,9 +154,28 @@ def evaluate_detections(coco_gt, coco_dt):
     """
     # Save to temporary files
     with open("gt.json", "w") as f:
-        json.dump(coco_gt, f)
+          json.dump(coco_gt, f)
     with open("dt.json", "w") as f:
         json.dump(coco_dt, f)
+    
+    coco_gt_obj = COCO("gt.json")
+    
+    # Handle empty detections
+    if not coco_dt:
+        print("Warning: No valid detections found. Returning zero metrics.")
+        return {
+            "mAP": 0.0,
+            "AP50": 0.0,
+            "AP75": 0.0,
+            "AP_small": 0.0,
+            "AP_medium": 0.0,
+            "AP_large": 0.0,
+            "AR_max1": 0.0,
+            "AR_max10": 0.0,
+            "AR_max100": 0.0
+        }, {}, None
+    
+    coco_dt_obj = coco_gt_obj.loadRes("dt.json")
     
     # Initialize COCO ground truth and detections
     coco_gt_obj = COCO("gt.json")

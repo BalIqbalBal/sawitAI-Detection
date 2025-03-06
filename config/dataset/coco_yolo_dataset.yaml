@@ -1,8 +1,8 @@
 
-name: YoloCOODataset  # or COCODataset
+name: YoloCOCODataset  # or COCODataset
 root_dir: /content/mopad/merged_mopad_data
 annotation_file: /content/mopad/mopad_annotations/merged_coco.json
-input_shape: [416, 416]  # Specific to YoloDataset
+input_shape: [640, 640]  # Specific to YoloDataset
 num_classes: 80  # Specific to YoloDataset
 epoch_length: 1000  # Specific to YoloDataset
 mosaic: True  # Specific to YoloDataset
@@ -10,7 +10,7 @@ mixup: True  # Specific to YoloDataset
 mosaic_prob: 0.5  # Specific to YoloDataset
 mixup_prob: 0.5  # Specific to YoloDataset
 special_aug_ratio: 0.7  # Specific to YoloDataset
-batch_size: 32
+batch_size: 16
 shuffle: True
 num_workers: 1
 train_ratio: 0.7

@@ -22,7 +22,7 @@ def evaluate_model(model, dataloader, device):
         # Add tqdm progress bar for evaluation
         with tqdm(dataloader, desc="Evaluating") as pbar:
             for i, (images, targets) in enumerate(pbar):
-                images = list(img.to(device) for img in images)
+                images = images.to(device)
                 outputs = model(images)
                 
                 # Store predictions and targets
@@ -87,12 +87,12 @@ def train(cfg: DictConfig):
             with tqdm(train_dataloader, desc=f"Epoch [{epoch+1}/{cfg.model.epochs}]") as pbar:
                 for batch_idx, (images, targets) in enumerate(pbar):
                     
-                    images = list(img.to(device) for img in images)
+                    images = images.to(device)
                     targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
 
                     # Forward pass
                     loss_dict = model(images, targets)
-                    loss = sum(loss for loss in loss_dict.values())
+                    loss = sum(loss for loss in loss_dict.values())/cfg.dataset.batch_size
                     epoch_loss += loss.item()
 
                     # Backward pass

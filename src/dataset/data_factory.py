@@ -16,37 +16,9 @@ DATASET_MAPPING = {
 }
 
 def yolo_collate_fn(batch):
-    """
-    Collate function for YOLO dataset.
-    Args:
-        batch: List of tuples (image, labels_out).
-    Returns:
-        images: Tensor of shape (batch_size, C, H, W).
-        bboxes: Tensor of shape (N, 6), where N is the total number of boxes,
-                and each row contains [batch_index, class_id, center_x, center_y, width, height].
-    """
-    images = []
-    bboxes = []
-
-    for i, (img, label) in enumerate(batch):
-        images.append(img)
-
-        if label.shape[0] > 0:  # Check if there are any boxes
-            # Add batch index to each box
-            batch_index = torch.full((label.shape[0], 1), i)
-            combined = torch.cat((batch_index, label[:, 1:]), dim=1)
-            bboxes.append(combined)
-
-    # Stack images into a single tensor
-    images = torch.stack(images, dim=0)
-
-    # Concatenate all bounding boxes into a single tensor
-    if bboxes:
-        bboxes = torch.cat(bboxes, dim=0)
-    else:
-        bboxes = torch.zeros((0, 6), dtype=torch.float32)
-
-    return images, bboxes
+    images = torch.stack([item[0] for item in batch], dim=0)
+    targets = [item[1] for item in batch]
+    return images, targets
 
 def collate_fn(batch):
     return tuple(zip(*batch))
@@ -148,6 +120,7 @@ def get_dataloader(cfg, dataset):
     Returns:
         DataLoader: DataLoader for the dataset.
     """
+    collate_fn = yolo_collate_fn if cfg.dataset.name == "YoloCOCODataset" else collate_fn
     return DataLoader(
         dataset,
         batch_size=cfg.dataset.batch_size,
