@@ -15,7 +15,7 @@ from utils.metrics import DetMetrics
 
 def evaluate_model(model, dataloader, device, det_metrics):
     """
-    Evaluate the model using DetMetrics.
+    Evaluate the model using DetMetrics (vectorized version).
     """
     model.eval()
     det_metrics.reset()  # Reset metrics for a new evaluation
@@ -26,17 +26,17 @@ def evaluate_model(model, dataloader, device, det_metrics):
                 images = images.to(device)
                 outputs = model(images)
 
-                # Convert model outputs to DetMetrics format
-                pred_boxes = outputs['boxes'].cpu().numpy()
-                pred_scores = outputs['scores'].cpu().numpy()
-                pred_labels = outputs['labels'].cpu().numpy()
+                # Convert model outputs to DetMetrics format (entire batch)
+                pred_boxes = [output['boxes'].cpu().numpy() for output in outputs]
+                pred_scores = [output['scores'].cpu().numpy() for output in outputs]
+                pred_labels = [output['labels'].cpu().numpy() for output in outputs]
 
-                # Convert ground truth to DetMetrics format
-                gt_boxes = [t['boxes'].cpu().numpy() for t in targets]
-                gt_labels = [t['labels'].cpu().numpy() for t in targets]
+                # Convert ground truth to DetMetrics format (entire batch)
+                gt_boxes = [target['boxes'].cpu().numpy() for target in targets]
+                gt_labels = [target['labels'].cpu().numpy() for target in targets]
 
-                # Update DetMetrics with predictions and ground truth
-                det_metrics.process(pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels)
+                # Update DetMetrics with predictions and ground truth (entire batch)
+                det_metrics.process_batch(pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels)
 
     # Compute and return metrics
     metrics = det_metrics.results_dict
@@ -111,17 +111,17 @@ def train(cfg: DictConfig):
                     loss = sum(loss for loss in loss_dict.values()) / cfg.dataset.batch_size
                     epoch_loss += loss.item()
 
-                    # Convert model outputs to DetMetrics format
-                    pred_boxes = outputs['boxes'].cpu().numpy()
-                    pred_scores = outputs['scores'].cpu().numpy()
-                    pred_labels = outputs['labels'].cpu().numpy()
+                    # Convert model outputs to DetMetrics format (entire batch)
+                    pred_boxes = [output['boxes'].cpu().numpy() for output in outputs]
+                    pred_scores = [output['scores'].cpu().numpy() for output in outputs]
+                    pred_labels = [output['labels'].cpu().numpy() for output in outputs]
 
-                    # Convert ground truth to DetMetrics format
-                    gt_boxes = [t['boxes'].cpu().numpy() for t in targets]
-                    gt_labels = [t['labels'].cpu().numpy() for t in targets]
+                    # Convert ground truth to DetMetrics format (entire batch)
+                    gt_boxes = [target['boxes'].cpu().numpy() for target in targets]
+                    gt_labels = [target['labels'].cpu().numpy() for target in targets]
 
-                    # Update DetMetrics with predictions and ground truth
-                    train_metrics.process(pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels)
+                    # Update DetMetrics with predictions and ground truth (entire batch)
+                    train_metrics.process_batch(pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels)
 
                     # Backward pass
                     optimizer.zero_grad()
@@ -138,15 +138,8 @@ def train(cfg: DictConfig):
             avg_epoch_loss = epoch_loss / len(train_dataloader)
             mlflow.log_metric("avg_train_loss", avg_epoch_loss, step=epoch)
 
-            # Log training metrics
-            train_metrics_results = train_metrics.results_dict
-            mlflow.log_metrics({
-                "train_mAP": train_metrics_results["metrics/mAP50-95(B)"],
-                "train_AP50": train_metrics_results["metrics/mAP50(B)"],
-                "train_precision": train_metrics_results["metrics/precision(B)"],
-                "train_recall": train_metrics_results["metrics/recall(B)"],
-            }, step=epoch)
-
+            # Log training curves (e.g., precision-recall curves)
+            train_metrics.log_curves_to_mlflow(prefix="train_")
             # Log training curves (e.g., precision-recall curves)
             train_metrics.log_curves_to_mlflow(prefix="train_")
 
@@ -154,20 +147,9 @@ def train(cfg: DictConfig):
             eval_metrics.reset()  # Reset metrics for evaluation dataset
             eval_metrics = evaluate_model(model, eval_dataloader, device, eval_metrics)
             
-            # Log evaluation metrics
-            mlflow.log_metrics({
-                "eval_mAP": eval_metrics["metrics/mAP50-95(B)"],
-                "eval_AP50": eval_metrics["metrics/mAP50(B)"],
-                "eval_precision": eval_metrics["metrics/precision(B)"],
-                "eval_recall": eval_metrics["metrics/recall(B)"],
-            }, step=epoch)
-            
             # Log evaluation curves (e.g., precision-recall curves)
             eval_metrics.log_curves_to_mlflow(prefix="eval_")
-
-            print(f"Epoch [{epoch+1}/{cfg.model.epochs}], "
-                  f"Train mAP: {train_metrics_results['metrics/mAP50-95(B)']:.4f}, "
-                  f"Eval mAP: {eval_metrics['metrics/mAP50-95(B)']:.4f}")
+            eval_metrics.log_curves_to_mlflow(prefix="eval_")
 
         # Test the model on the test dataset after training
         test_metrics.reset()  # Reset metrics for test dataset
@@ -182,6 +164,7 @@ def train(cfg: DictConfig):
         })
         
         # Log test curves (e.g., precision-recall curves)
+        test_metrics.log_curves_to_mlflow(prefix="test_")
         test_metrics.log_curves_to_mlflow(prefix="test_")
 
         print(f"Test mAP: {test_metrics['metrics/mAP50-95(B)']:.4f}, AP50: {test_metrics['metrics/mAP50(B)']:.4f}")

@@ -534,9 +534,7 @@ def compute_ap(recall, precision):
     return ap, mpre, mrec
 
 
-def ap_per_class(
-    tp, conf, pred_cls, target_cls, plot=False, on_plot=None, save_dir=Path(), names={}, eps=1e-16, prefix=""
-):
+def ap_per_class(tp, conf, pred_cls, target_cls, plot=False, on_plot=None, save_dir=Path(), names={}, eps=1e-16, prefix=""):
     """
     Computes the average precision per class for object detection evaluation.
 
@@ -566,6 +564,24 @@ def ap_per_class(
         x (np.ndarray): X-axis values for the curves. Shape: (1000,).
         prec_values (np.ndarray): Precision values at mAP@0.5 for each class. Shape: (nc, 1000).
     """
+    # Check for empty inputs
+    if len(tp) == 0 or len(conf) == 0 or len(pred_cls) == 0 or len(target_cls) == 0:
+        print("Warning: Empty inputs detected. Skipping metric computation.")
+        return (
+            np.array([]),  # tp
+            np.array([]),  # fp
+            np.array([]),  # p
+            np.array([]),  # r
+            np.array([]),  # f1
+            np.array([]),  # ap
+            np.array([]),  # unique_classes
+            np.array([]),  # p_curve
+            np.array([]),  # r_curve
+            np.array([]),  # f1_curve
+            np.array([]),  # x
+            np.array([]),  # prec_values
+        )
+
     # Sort by objectness
     i = np.argsort(-conf)
     tp, conf, pred_cls = tp[i], conf[i], pred_cls[i]
@@ -810,8 +826,33 @@ class DetMetrics(SimpleClass):
         self.speed = {"preprocess": 0.0, "inference": 0.0, "loss": 0.0, "postprocess": 0.0}
         self.task = "detect"
 
-    def process(self, tp, conf, pred_cls, target_cls):
-        """Process predicted results for object detection and update metrics."""
+    def reset(self):
+        """
+        Reset the internal state of the metrics.
+        """
+        self.box = Metric()  # Reinitialize the Metric object
+        self.speed = {"preprocess": 0.0, "inference": 0.0, "loss": 0.0, "postprocess": 0.0}
+
+    def process(self, pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels):
+        """
+        Process predicted results for object detection and update metrics.
+
+        Args:
+            pred_boxes (np.ndarray): Predicted bounding boxes. Shape: (N, 4).
+            pred_scores (np.ndarray): Predicted confidence scores. Shape: (N,).
+            pred_labels (np.ndarray): Predicted class labels. Shape: (N,).
+            gt_boxes (np.ndarray): Ground truth bounding boxes. Shape: (M, 4).
+            gt_labels (np.ndarray): Ground truth class labels. Shape: (M,).
+        """
+        # Compute true positives (tp) based on IoU
+        tp = self._compute_tp(pred_boxes, gt_boxes)
+
+        # Prepare inputs for ap_per_class
+        conf = pred_scores  # Confidence scores
+        pred_cls = pred_labels  # Predicted classes
+        target_cls = gt_labels  # Ground truth classes
+
+        # Compute metrics using ap_per_class
         results = ap_per_class(
             tp,
             conf,
@@ -821,9 +862,141 @@ class DetMetrics(SimpleClass):
             save_dir=self.save_dir,
             names=self.names,
             on_plot=self.on_plot,
-        )[2:]
+        )[2:]  # Skip tp and fp, use p, r, f1, ap, etc.
+
+        # Update metrics
         self.box.nc = len(self.names)
         self.box.update(results)
+
+    def log_metrics_to_mlflow(self, prefix=""):
+        """
+        Log computed metrics to MLflow.
+
+        Args:
+            prefix (str): Prefix to add to metric names (e.g., "train_", "eval_").
+        """
+        metrics = {
+            f"{prefix}precision": self.box.mean_results()[0],
+            f"{prefix}recall": self.box.mean_results()[1],
+            f"{prefix}mAP50": self.box.mean_results()[2],
+            f"{prefix}mAP50-95": self.box.mean_results()[3],
+        }
+        log_metrics(metrics)
+
+    def log_curves_to_mlflow(self, prefix=""):
+        """
+        Log precision-recall curves to MLflow as artifacts.
+
+        Args:
+            prefix (str): Prefix to add to artifact names (e.g., "train_", "eval_").
+        """
+        if not self.plot:
+            return  # Skip if plotting is disabled
+
+        # Example: Log precision-recall curve
+        pr_curve_path = self.save_dir / f"{prefix}pr_curve.png"
+        self._plot_pr_curve(pr_curve_path)
+        log_artifact(pr_curve_path)
+
+    def _plot_pr_curve(self, filename):
+        """
+        Plot precision-recall curve and save it as an image.
+
+        Args:
+            filename (Path): Path to save the plot.
+        """
+        import matplotlib.pyplot as plt
+
+        # Example: Dummy plot (replace with actual PR curve data)
+        plt.figure()
+        plt.plot([0, 1], [1, 0], label="Precision-Recall Curve")
+        plt.xlabel("Recall")
+        plt.ylabel("Precision")
+        plt.title("Precision-Recall Curve")
+        plt.legend()
+        plt.savefig(filename)
+        plt.close()
+
+    def process_batch(self, pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels):
+        """
+        Process a batch of predictions and ground truth.
+
+        Args:
+            pred_boxes (list of np.ndarray): Predicted bounding boxes for the batch.
+            pred_scores (list of np.ndarray): Predicted confidence scores for the batch.
+            pred_labels (list of np.ndarray): Predicted class labels for the batch.
+            gt_boxes (list of np.ndarray): Ground truth bounding boxes for the batch.
+            gt_labels (list of np.ndarray): Ground truth class labels for the batch.
+        """
+        # Concatenate all predictions and ground truth for the batch
+        pred_boxes = np.concatenate(pred_boxes) if pred_boxes else np.array([])
+        pred_scores = np.concatenate(pred_scores) if pred_scores else np.array([])
+        pred_labels = np.concatenate(pred_labels) if pred_labels else np.array([])
+        gt_boxes = np.concatenate(gt_boxes) if gt_boxes else np.array([])
+        gt_labels = np.concatenate(gt_labels) if gt_labels else np.array([])
+
+        # Skip if there are no predictions or ground truth
+        if len(pred_boxes) == 0 or len(gt_boxes) == 0:
+            print("Warning: No predictions or ground truth boxes found. Skipping metric computation.")
+            return
+
+        # Compute true positives (tp) for the entire batch
+        tp = self._compute_tp(pred_boxes, gt_boxes)
+
+        # Skip if there are no true positives
+        if len(tp) == 0:
+            print("Warning: No true positives found. Skipping metric computation.")
+            return
+
+        # Prepare inputs for ap_per_class
+        conf = pred_scores  # Confidence scores
+        pred_cls = pred_labels  # Predicted classes
+        target_cls = gt_labels  # Ground truth classes
+
+        # Compute metrics using ap_per_class
+        results = ap_per_class(
+            tp,
+            conf,
+            pred_cls,
+            target_cls,
+            plot=self.plot,
+            save_dir=self.save_dir,
+            names=self.names,
+            on_plot=self.on_plot,
+        )[2:]  # Skip tp and fp, use p, r, f1, ap, etc.
+
+        # Update metrics
+        self.box.nc = len(self.names)
+        self.box.update(results)
+        
+    def _compute_tp(self, pred_boxes, gt_boxes, iou_threshold=0.5):
+        """
+        Compute true positives (tp) based on IoU between predicted and ground truth boxes.
+
+        Args:
+            pred_boxes (np.ndarray): Predicted bounding boxes. Shape: (N, 4).
+            gt_boxes (np.ndarray): Ground truth bounding boxes. Shape: (M, 4).
+            iou_threshold (float): IoU threshold to consider a detection as a true positive.
+
+        Returns:
+            tp (np.ndarray): Binary array indicating whether the detection is correct (True) or not (False).
+        """
+        # Convert numpy arrays to PyTorch tensors
+        pred_boxes = torch.from_numpy(pred_boxes).float()  # Shape: (N, 4)
+        gt_boxes = torch.from_numpy(gt_boxes).float()  # Shape: (M, 4)
+
+        # Expand dimensions for broadcasting
+        pred_boxes = pred_boxes.unsqueeze(1)  # Shape: (N, 1, 4)
+        gt_boxes = gt_boxes.unsqueeze(0)  # Shape: (1, M, 4)
+
+        # Compute IoU between all pairs of predicted and ground truth boxes
+        iou = bbox_iou(pred_boxes, gt_boxes, xywh=False)  # Shape: (N, M)
+
+        # Determine true positives
+        max_iou, _ = torch.max(iou, dim=1)  # Shape: (N,)
+        tp = (max_iou >= iou_threshold).numpy()  # Convert to numpy array
+
+        return tp
 
     @property
     def keys(self):
@@ -867,59 +1040,6 @@ class DetMetrics(SimpleClass):
     def curves_results(self):
         """Returns dictionary of computed performance metrics and statistics."""
         return self.box.curves_results
-
-    def log_metrics_to_mlflow(self, prefix=""):
-        """
-        Log computed metrics to MLflow.
-
-        Args:
-            prefix (str): Prefix to add to metric names (e.g., "train_", "eval_").
-        """
-        metrics = {
-            f"{prefix}precision": self.mean_results()[0],
-            f"{prefix}recall": self.mean_results()[1],
-            f"{prefix}mAP50": self.mean_results()[2],
-            f"{prefix}mAP50-95": self.mean_results()[3],
-        }
-        log_metrics(metrics)
-
-    def log_curves_to_mlflow(self, prefix=""):
-        """
-        Log precision-recall curves to MLflow as artifacts.
-
-        Args:
-            prefix (str): Prefix to add to artifact names (e.g., "train_", "eval_").
-        """
-        if not self.plot:
-            return  # Skip if plotting is disabled
-
-        for curve_name in self.curves:
-            # Save the curve as an image
-            filename = self.save_dir / f"{prefix}{curve_name}.png"
-            self._plot_curve(curve_name, filename)
-
-            # Log the curve as an artifact
-            log_artifact(filename)
-
-    def _plot_curve(self, curve_name, filename):
-        """
-        Plot a specific curve and save it as an image.
-
-        Args:
-            curve_name (str): Name of the curve to plot.
-            filename (Path): Path to save the plot.
-        """
-        import matplotlib.pyplot as plt
-
-        # Example: Plotting a dummy curve (replace with actual curve data)
-        plt.figure()
-        plt.plot([0, 1], [0, 1], label=curve_name)
-        plt.xlabel("Recall")
-        plt.ylabel("Precision")
-        plt.title(curve_name)
-        plt.legend()
-        plt.savefig(filename)
-        plt.close()
 
 
 class SegmentMetrics(SimpleClass):

@@ -1,20 +1,18 @@
-import os
-import cv2
-import numpy as np
-import torch
-from PIL import Image
 from pycocotools.coco import COCO
+import os
+import numpy as np
+import cv2
+from PIL import Image
 from torch.utils.data.dataset import Dataset
-from random import sample, shuffle
-
 from utils.utils import cvtColor, preprocess_input
 
 class YoloCOCODataset(Dataset):
-    def __init__(self, root_dir, annotation_file, input_shape, num_classes, epoch_length, 
-                 mosaic=True, mixup=True, mosaic_prob=0.5, mixup_prob=0.5, train=True, special_aug_ratio=0.7, transform=None):
+    def __init__(self, image_dir, coco_annotation_path, input_shape, num_classes, epoch_length, 
+                 mosaic=True, mixup=True, mosaic_prob=0.5, mixup_prob=0.5, train=True, special_aug_ratio=0.7, 
+                 transform=None):
         super(YoloCOCODataset, self).__init__()
-        self.root_dir = root_dir
-        self.coco = COCO(annotation_file)
+        self.coco = COCO(coco_annotation_path)
+        self.image_dir = image_dir
         self.input_shape = input_shape
         self.num_classes = num_classes
         self.epoch_length = epoch_length
@@ -24,270 +22,317 @@ class YoloCOCODataset(Dataset):
         self.mixup_prob = mixup_prob
         self.train = train
         self.special_aug_ratio = special_aug_ratio
+        self.epoch_now = -1
+        self.bbox_attrs = 5 + num_classes
+
         self.transform = transform
 
-        self.epoch_now = -1
-        self.image_ids = self._filter_valid_image_ids()
-        self.length = len(self.image_ids)
+        # Load COCO annotations
+        self.load_coco_annotations()
+        self.length = len(self.annotation_lines)
 
-    def _filter_valid_image_ids(self):
-        valid_image_ids = []
-        for image_id in self.coco.imgs.keys():
-            image_info = self.coco.loadImgs(image_id)[0]
-            image_path = os.path.join(self.root_dir, image_info["file_name"])
-
-            if os.path.exists(image_path) and self._is_valid_image(image_path):
-                valid_image_ids.append(image_id)
-            else:
-                print(f"Invalid or missing image: {image_path} (Image ID: {image_id})")
-        return valid_image_ids
-
-    def _is_valid_image(self, image_path):
-        try:
-            with Image.open(image_path) as img:
-                img.verify()
-            return True
-        except Exception as e:
-            print(f"Error loading image {image_path}: {e}")
-            return False
+    def load_coco_annotations(self):
+        """Convert COCO annotations to YOLO format"""
+        self.annotation_lines = []
+        img_ids = self.coco.getImgIds()
+        
+        for img_id in img_ids:
+            img_info = self.coco.loadImgs(img_id)[0]
+            image_path = os.path.join(self.image_dir, img_info['file_name'])
+            ann_ids = self.coco.getAnnIds(imgIds=img_id)
+            anns = self.coco.loadAnns(ann_ids)
+            
+            boxes = []
+            for ann in anns:
+                x, y, w, h = ann['bbox']
+                class_id = ann['category_id'] - 1  # Convert to 0-based index
+                x1 = float(x)
+                y1 = float(y)
+                x2 = float(x + w)
+                y2 = float(y + h)
+                boxes.append([x1, y1, x2, y2, class_id])
+            
+            if boxes:
+                # Format: "path/to/img.jpg x1,y1,x2,y2,class_id x1,y1,x2,y2,class_id ..."
+                box_strings = [','.join(map(str, box)) for box in boxes]
+                line = f"{image_path} {' '.join(box_strings)}"
+                self.annotation_lines.append(line)
 
     def __len__(self):
         return self.length
 
     def __getitem__(self, index):
         index = index % self.length
-        image_id = self.image_ids[index]
 
-        # Load image
-        image_info = self.coco.loadImgs(image_id)[0]
-        image_path = os.path.join(self.root_dir, image_info["file_name"])
-        image = Image.open(image_path).convert("RGB")
-
-        # Load annotations
-        ann_ids = self.coco.getAnnIds(imgIds=image_id)
-        anns = self.coco.loadAnns(ann_ids)
-
-        # Prepare boxes and labels
-        boxes = []
-        labels = []
-        for ann in anns:
-            x, y, w, h = ann["bbox"]
-            boxes.append([x, y, w, h])
-            labels.append(ann["category_id"])
-
-        boxes = np.array(boxes, dtype=np.float32)
-        labels = np.array(labels, dtype=np.int64)
-
-        # Apply transforms
+        # Apply transforms (if any)
         if self.transform:
             orig_w, orig_h = image.size
             image = self.transform(image)
+
             new_h, new_w = image.shape[1:]  # Transformed image dimensions
             scale_x = new_w / orig_w
             scale_y = new_h / orig_h
-            boxes[:, 0] *= scale_x  # x
-            boxes[:, 1] *= scale_y  # y
-            boxes[:, 2] *= scale_x  # width
-            boxes[:, 3] *= scale_y  # height
+            boxes[:, [0, 2]] *= scale_x  # Scale x-coordinates
+            boxes[:, [1, 3]] *= scale_y  # Scale y-coordinates
+        
 
-        # Apply Mosaic and MixUp augmentations
-        if self.mosaic and np.random.rand() < self.mosaic_prob and self.epoch_now < self.epoch_length * self.special_aug_ratio:
-            mosaic_ids = sample(self.image_ids, 3)
-            mosaic_ids.append(image_id)
-            shuffle(mosaic_ids)
-             
-            image, boxes, labels = self.get_random_data_with_mosaic(mosaic_ids, self.input_shape)
+        if self.mosaic and self.rand() < self.mosaic_prob and self.epoch_now < self.epoch_length * self.special_aug_ratio:
+            lines = np.random.choice(self.annotation_lines, 3, replace=False)
+            lines = np.append(lines, self.annotation_lines[index])
+            np.random.shuffle(lines)
+            image, box = self.get_random_data_with_Mosaic(lines, self.input_shape)
             
-            if self.mixup and np.random.rand() < self.mixup_prob:
-                mixup_id = sample(self.image_ids, 1)[0]
-                mixup_image, mixup_boxes, mixup_labels = self.get_random_data(mixup_id, self.input_shape, random=self.train)
-                image, boxes, labels = self.get_random_data_with_mixup(image, boxes, labels, mixup_image, mixup_boxes, mixup_labels)
-
+            if self.mixup and self.rand() < self.mixup_prob:
+                line = np.random.choice(self.annotation_lines)
+                image2, box2 = self.get_random_data(line, self.input_shape, random=self.train)
+                image, box = self.get_random_data_with_MixUp(image, box, image2, box2)
         else:
-            image, boxes, labels = self.get_random_data(image_id, self.input_shape, random=self.train)
+           #image, box = self.get_random_data(self.annotation_lines[index], self.input_shape, random=self.train)
+           pass
+        
+        # Preprocess image
+        image = np.transpose(preprocess_input(np.array(image, dtype=np.float32)), (2, 0, 1))
+        box = np.array(box, dtype=np.float32)
+        
+        # Format labels for COCO
+        labels = np.zeros((len(box), 6))
+        if len(box) > 0:
+            # Normalize coordinates to [0,1]
+            box[:, [0,2]] /= self.input_shape[1]  # x coordinates
+            box[:, [1,3]] /= self.input_shape[0]  # y coordinates
+            
+            # Convert to [center_x, center_y, width, height]
+            box[:, 2:4] = box[:, 2:4] - box[:, 0:2]  # width, height
+            box[:, 0:2] = box[:, 0:2] + box[:, 2:4] / 2  # center coordinates
+            
+            labels[:, 1] = box[:, -1]  # Class IDs
+            labels[:, 2:] = box[:, :4]  # Box coordinates
 
-        # Prepare target dictionary
+        # Convert to COCO format [x_min, y_min, width, height]
+        if len(box) > 0:
+            # Extract normalized center_x, center_y, width, height
+            boxes = labels[:, 2:]
+            class_ids = labels[:, 1].astype(np.int64)
+            
+            # Denormalize and convert to xywh
+            x_min = (boxes[:, 0] - boxes[:, 2]/2) * self.input_shape[1]
+            y_min = (boxes[:, 1] - boxes[:, 3]/2) * self.input_shape[0]
+            width = boxes[:, 2] * self.input_shape[1]
+            height = boxes[:, 3] * self.input_shape[0]
+            
+            boxes_coco = np.stack([x_min, y_min, width, height], axis=1)
+            labels_coco = class_ids
+        else:
+            boxes_coco = np.zeros((0, 4), dtype=np.float32)
+            labels_coco = np.zeros((0), dtype=np.int64)
+
         target = {
-            "boxes": torch.as_tensor(boxes, dtype=torch.float32),
-            "labels": torch.as_tensor(labels, dtype=torch.int64),
+            "boxes": boxes_coco,
+            "labels": labels_coco,
         }
-
-        # Convert image to tensor and normalize
-        image = np.array(image, dtype=np.float32)
-        image = np.transpose(preprocess_input(image), (2, 0, 1))
-        image = torch.from_numpy(image).type(torch.FloatTensor)
 
         return image, target
 
-    def rand(self, a=0, b=1):
-        return np.random.rand() * (b - a) + a
-
-    def get_random_data(self, image_id, input_shape, jitter=0.3, hue=0.1, sat=0.7, val=0.4, random=True):
-        image_info = self.coco.loadImgs(image_id)[0]
-        image_path = os.path.join(self.root_dir, image_info["file_name"])
-        image = Image.open(image_path).convert("RGB")
+    def get_random_data(self, annotation_line, input_shape, jitter=.3, hue=.1, sat=0.7, val=0.4, random=True):
+        line = annotation_line.split()
+        image = Image.open(line[0])
+        image = cvtColor(image)
         iw, ih = image.size
         h, w = input_shape
 
-        # Load annotations
-        ann_ids = self.coco.getAnnIds(imgIds=image_id)
-        anns = self.coco.loadAnns(ann_ids)
-        boxes = []
-        for ann in anns:
-            x, y, bw, bh = ann["bbox"]
-            boxes.append([x, y, bw, bh, ann["category_id"]])
-        boxes = np.array(boxes, dtype=np.float32)
+        # Parse annotation with float coordinates
+        box = np.array([np.array(list(map(float, box.split(',')))) for box in line[1:]])
 
         if not random:
+            # Rescale without augmentation
             scale = min(w/iw, h/ih)
             nw = int(iw*scale)
             nh = int(ih*scale)
-            dx = (w - nw) // 2
-            dy = (h - nh) // 2
-
+            dx = (w-nw)//2
+            dy = (h-nh)//2
             image = image.resize((nw, nh), Image.BICUBIC)
-            new_image = Image.new('RGB', (w, h), (128, 128, 128))
+            new_image = Image.new('RGB', (w, h), (128,128,128))
             new_image.paste(image, (dx, dy))
             image_data = np.array(new_image, np.float32)
+            
+            if len(box) > 0:
+                box[:, [0,2]] = box[:, [0,2]]*scale + dx
+                box[:, [1,3]] = box[:, [1,3]]*scale + dy
+                box[:, 0:2] = np.maximum(box[:, 0:2], 0)
+                box[:, 2] = np.minimum(box[:, 2], w)
+                box[:, 3] = np.minimum(box[:, 3], h)
+                box_w = box[:, 2] - box[:, 0]
+                box_h = box[:, 3] - box[:, 1]
+                box = box[np.logical_and(box_w>1, box_h>1)]
+            return image_data, box
 
-            if len(boxes) > 0:
-                boxes[:, 0] = boxes[:, 0] * scale + dx
-                boxes[:, 1] = boxes[:, 1] * scale + dy
-                boxes[:, 2] = boxes[:, 2] * scale
-                boxes[:, 3] = boxes[:, 3] * scale
-
-                boxes[:, 0] = np.maximum(boxes[:, 0], 0)
-                boxes[:, 1] = np.maximum(boxes[:, 1], 0)
-                boxes[:, 0] = np.minimum(boxes[:, 0], w - boxes[:, 2])
-                boxes[:, 1] = np.minimum(boxes[:, 1], h - boxes[:, 3])
-
-                valid_mask = np.logical_and(boxes[:, 2] > 1, boxes[:, 3] > 1)
-                boxes = boxes[valid_mask]
-
-            return image_data, boxes[:, :4], boxes[:, 4].astype(np.int64)
-
-        # Random augmentation
-        new_ar = iw/ih * self.rand(1-jitter, 1+jitter) / self.rand(1-jitter, 1+jitter)
-        scale = self.rand(0.25, 2)
+        # Apply data augmentation
+        new_ar = iw/ih * self.rand(1-jitter,1+jitter) / self.rand(1-jitter,1+jitter)
+        scale = self.rand(.25, 2)
         if new_ar < 1:
-            nh = int(scale * h)
-            nw = int(nh * new_ar)
+            nh = int(scale*h)
+            nw = int(nh*new_ar)
         else:
-            nw = int(scale * w)
-            nh = int(nw / new_ar)
+            nw = int(scale*w)
+            nh = int(nw/new_ar)
         image = image.resize((nw, nh), Image.BICUBIC)
 
-        dx = int(self.rand(0, w - nw))
-        dy = int(self.rand(0, h - nh))
-        new_image = Image.new('RGB', (w, h), (128, 128, 128))
+        # Place image with random offset
+        dx = int(self.rand(0, w-nw))
+        dy = int(self.rand(0, h-nh))
+        new_image = Image.new('RGB', (w,h), (128,128,128))
         new_image.paste(image, (dx, dy))
-        
-        # Flip
-        if self.rand() < 0.5:
-            new_image = new_image.transpose(Image.FLIP_LEFT_RIGHT)
-            boxes[:, 0] = w - (boxes[:, 0] + boxes[:, 2])
+        image = new_image
 
-        # HSV augmentation
-        image_data = np.array(new_image, np.uint8)
+        # Random horizontal flip
+        flip = self.rand() < 0.5
+        if flip:
+            image = image.transpose(Image.FLIP_LEFT_RIGHT)
+
+        # Apply HSV color augmentation
+        image_data = np.array(image, dtype=np.uint8)
         r = np.random.uniform(-1, 1, 3) * [hue, sat, val] + 1
         hue, sat, val = cv2.split(cv2.cvtColor(image_data, cv2.COLOR_RGB2HSV))
-        dtype = image_data.dtype
-        lut_hue = ((np.arange(0, 256, dtype=np.float32) * r[0]) % 180).astype(dtype)
-        lut_sat = np.clip(np.arange(0, 256, dtype=np.float32) * r[1], 0, 255).astype(dtype)
-        lut_val = np.clip(np.arange(0, 256, dtype=np.float32) * r[2], 0, 255).astype(dtype)
+        lut_hue = ((np.arange(0, 256, dtype=np.float32) * r[0]) % 180).astype(np.uint8)
+        lut_sat = np.clip(np.arange(0, 256, dtype=np.float32) * r[1], 0, 255).astype(np.uint8)
+        lut_val = np.clip(np.arange(0, 256, dtype=np.float32) * r[2], 0, 255).astype(np.uint8)
         image_data = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
         image_data = cv2.cvtColor(image_data, cv2.COLOR_HSV2RGB)
 
-        # Adjust boxes
-        boxes[:, 0] = boxes[:, 0] * nw / iw + dx
-        boxes[:, 1] = boxes[:, 1] * nh / ih + dy
-        boxes[:, 2] = boxes[:, 2] * nw / iw
-        boxes[:, 3] = boxes[:, 3] * nh / ih
+        # Adjust bounding boxes
+        if len(box) > 0:
+            box[:, [0,2]] = box[:, [0,2]]*nw/iw + dx
+            box[:, [1,3]] = box[:, [1,3]]*nh/ih + dy
+            if flip:
+                box[:, [0,2]] = w - box[:, [2,0]]
+            box[:, 0:2] = np.maximum(box[:, 0:2], 0)
+            box[:, 2] = np.minimum(box[:, 2], w)
+            box[:, 3] = np.minimum(box[:, 3], h)
+            box_w = box[:, 2] - box[:, 0]
+            box_h = box[:, 3] - box[:, 1]
+            box = box[np.logical_and(box_w>1, box_h>1)]
+        return image_data, box
 
-        boxes[:, 0] = np.maximum(boxes[:, 0], 0)
-        boxes[:, 1] = np.maximum(boxes[:, 1], 0)
-        boxes[:, 0] = np.minimum(boxes[:, 0], w - boxes[:, 2])
-        boxes[:, 1] = np.minimum(boxes[:, 1], h - boxes[:, 3])
-
-        valid_mask = np.logical_and(boxes[:, 2] > 1, boxes[:, 3] > 1)
-        boxes = boxes[valid_mask]
-
-        return image_data, boxes[:, :4], boxes[:, 4].astype(np.int64)
-
-    def get_random_data_with_mosaic(self, image_ids, input_shape):
+    def get_random_data_with_Mosaic(self, annotation_lines, input_shape, jitter=0.3):
         h, w = input_shape
-        min_offset = 0.2
-        cutx = np.random.randint(int(w * min_offset), int(w * (1 - min_offset)))
-        cuty = np.random.randint(int(h * min_offset), int(h * (1 - min_offset)))
-
+        min_offset_x = self.rand(0.3, 0.7)
+        min_offset_y = self.rand(0.3, 0.7)
         image_datas = []
         box_datas = []
-        label_datas = []
-        for i, image_id in enumerate(image_ids):
-            img, boxes, labels = self.get_random_data(image_id, input_shape, random=True)
-            image_datas.append(img)
-            box_datas.append(boxes)
-            label_datas.append(labels)
-
-        # Create mosaic image
-        new_image = np.zeros((h, w, 3), dtype=np.uint8)
-        new_image[:cuty, :cutx] = image_datas[0][:cuty, :cutx]
-        new_image[:cuty, cutx:] = image_datas[1][:cuty, cutx:]
-        new_image[cuty:, :cutx] = image_datas[2][cuty:, :cutx]
-        new_image[cuty:, cutx:] = image_datas[3][cuty:, cutx:]
-
-        # Combine boxes
-        new_boxes = []
-        new_labels = []
-        for i in range(4):
-            if len(box_datas[i]) == 0:
-                continue
-            boxes = box_datas[i].copy()
-            labels = label_datas[i].copy()
-             
-            if i == 0:  # Top-left
-                boxes[:, 2] = np.minimum(boxes[:, 2], cutx - boxes[:, 0])
-                boxes[:, 3] = np.minimum(boxes[:, 3], cuty - boxes[:, 1])
-            elif i == 1:  # Top-right
-                boxes[:, 0] = np.maximum(boxes[:, 0], cutx)
-                boxes[:, 2] = np.minimum(boxes[:, 2], w - boxes[:, 0])
-                boxes[:, 3] = np.minimum(boxes[:, 3], cuty - boxes[:, 1])
-            elif i == 2:  # Bottom-left
-                boxes[:, 1] = np.maximum(boxes[:, 1], cuty)
-                boxes[:, 2] = np.minimum(boxes[:, 2], cutx - boxes[:, 0])
-                boxes[:, 3] = np.minimum(boxes[:, 3], h - boxes[:, 1])
-            elif i == 3:  # Bottom-right
-                boxes[:, 0] = np.maximum(boxes[:, 0], cutx)
-                boxes[:, 1] = np.maximum(boxes[:, 1], cuty)
-                boxes[:, 2] = np.minimum(boxes[:, 2], w - boxes[:, 0])
-                boxes[:, 3] = np.minimum(boxes[:, 3], h - boxes[:, 1])
-
-            valid_mask = np.logical_and(boxes[:, 2] > 1, boxes[:, 3] > 1)
-            boxes = boxes[valid_mask]
-            labels = labels[valid_mask]
+        
+        for i, line in enumerate(annotation_lines):
+            line_content = line.split()
+            image = Image.open(line_content[0])
+            image = cvtColor(image)
+            iw, ih = image.size
             
-            if len(boxes) > 0:
-                new_boxes.append(boxes)
-                new_labels.append(labels)
+            # Parse annotation with float coordinates
+            box = np.array([np.array(list(map(float, box.split(',')))) for box in line_content[1:]])
+            
+            # Random horizontal flip
+            flip = self.rand() < 0.5
+            if flip and len(box) > 0:
+                image = image.transpose(Image.FLIP_LEFT_RIGHT)
+                box[:, [0,2]] = iw - box[:, [2,0]]
+            
+            # Random scaling and aspect ratio distortion
+            new_ar = iw/ih * self.rand(1-jitter,1+jitter) / self.rand(1-jitter,1+jitter)
+            scale = self.rand(0.4, 1)
+            if new_ar < 1:
+                nh = int(scale*h)
+                nw = int(nh*new_ar)
+            else:
+                nw = int(scale*w)
+                nh = int(nw/new_ar)
+            image = image.resize((nw, nh), Image.BICUBIC)
+            
+            # Position images in mosaic grid
+            if i == 0:
+                dx = int(w*min_offset_x) - nw
+                dy = int(h*min_offset_y) - nh
+            elif i == 1:
+                dx = int(w*min_offset_x) - nw
+                dy = int(h*min_offset_y)
+            elif i == 2:
+                dx = int(w*min_offset_x)
+                dy = int(h*min_offset_y)
+            elif i == 3:
+                dx = int(w*min_offset_x)
+                dy = int(h*min_offset_y) - nh
+            
+            new_image = Image.new('RGB', (w,h), (128,128,128))
+            new_image.paste(image, (dx, dy))
+            image_data = np.array(new_image)
+            
+            # Adjust bounding boxes
+            if len(box) > 0:
+                box[:, [0,2]] = box[:, [0,2]]*nw/iw + dx
+                box[:, [1,3]] = box[:, [1,3]]*nh/ih + dy
+                box[:, 0:2] = np.maximum(box[:, 0:2], 0)
+                box[:, 2] = np.minimum(box[:, 2], w)
+                box[:, 3] = np.minimum(box[:, 3], h)
+                box_w = box[:, 2] - box[:, 0]
+                box_h = box[:, 3] - box[:, 1]
+                box = box[np.logical_and(box_w>1, box_h>1)]
+            
+            image_datas.append(image_data)
+            box_datas.append(box)
 
-        if len(new_boxes) == 0:
-            return new_image, np.empty((0, 4), dtype=np.float32), np.empty((0,), dtype=np.int64)
-        
-        new_boxes = np.concatenate(new_boxes, axis=0)
-        new_labels = np.concatenate(new_labels, axis=0)
-        return new_image, new_boxes, new_labels
+        # Combine mosaic images
+        cutx = int(w * min_offset_x)
+        cuty = int(h * min_offset_y)
+        new_image = np.zeros((h, w, 3), dtype=np.uint8)
+        new_image[:cuty, :cutx, :] = image_datas[0][:cuty, :cutx, :]
+        new_image[cuty:, :cutx, :] = image_datas[1][cuty:, :cutx, :]
+        new_image[cuty:, cutx:, :] = image_datas[2][cuty:, cutx:, :]
+        new_image[:cuty, cutx:, :] = image_datas[3][:cuty, cutx:, :]
 
-    def get_random_data_with_mixup(self, image1, boxes1, labels1, image2, boxes2, labels2):
-        # Create blended image
-        new_image = (np.array(image1, np.float32) * 0.5 + 
-                    np.array(image2, np.float32) * 0.5).astype(np.uint8)
-        
-        # Ensure boxes are 2D even if empty
-        boxes1 = boxes1.reshape(-1, 4) if boxes1.size else np.empty((0, 4), dtype=np.float32)
-        boxes2 = boxes2.reshape(-1, 4) if boxes2.size else np.empty((0, 4), dtype=np.float32)
-        
-        # Combine annotations
-        new_boxes = np.concatenate([boxes1, boxes2], axis=0)
-        new_labels = np.concatenate([labels1, labels2], axis=0)
-        
-        return new_image, new_boxes, new_labels
+        # Apply HSV color augmentation
+        r = np.random.uniform(-1, 1, 3) * [0.1, 0.7, 0.4] + 1
+        hue, sat, val = cv2.split(cv2.cvtColor(new_image, cv2.COLOR_RGB2HSV))
+        lut_hue = ((np.arange(0, 256) * r[0]) % 180).astype(np.uint8)
+        lut_sat = np.clip(np.arange(0, 256) * r[1], 0, 255).astype(np.uint8)
+        lut_val = np.clip(np.arange(0, 256) * r[2], 0, 255).astype(np.uint8)
+        new_image = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
+        new_image = cv2.cvtColor(new_image, cv2.COLOR_HSV2RGB)
+
+        # Merge bounding boxes from all mosaic parts
+        new_boxes = self.merge_bboxes(box_datas, cutx, cuty)
+        return new_image, new_boxes
+
+    def merge_bboxes(self, boxes, cutx, cuty):
+        merged_boxes = []
+        for i in range(4):
+            for box in boxes[i]:
+                x1, y1, x2, y2, cls = box
+                if i == 0:
+                    if y1 > cuty or x1 > cutx:
+                        continue
+                    x2 = min(x2, cutx)
+                    y2 = min(y2, cuty)
+                elif i == 1:
+                    if y2 < cuty or x1 > cutx:
+                        continue
+                    x2 = min(x2, cutx)
+                    y1 = max(y1, cuty)
+                elif i == 2:
+                    if y2 < cuty or x2 < cutx:
+                        continue
+                    x1 = max(x1, cutx)
+                    y1 = max(y1, cuty)
+                elif i == 3:
+                    if y1 > cuty or x2 < cutx:
+                        continue
+                    x1 = max(x1, cutx)
+                    y2 = min(y2, cuty)
+                merged_boxes.append([x1, y1, x2, y2, cls])
+        return np.array(merged_boxes)
+
+    def get_random_data_with_MixUp(self, image1, box1, image2, box2):
+        new_image = (np.array(image1, dtype=np.float32) * 0.5 + 
+                     np.array(image2, dtype=np.float32) * 0.5)
+        new_boxes = np.concatenate([box1, box2], axis=0)
+        return new_image.astype(np.uint8), new_boxes
+
+    def rand(self, a=0, b=1):
+        return np.random.rand() * (b - a) + a

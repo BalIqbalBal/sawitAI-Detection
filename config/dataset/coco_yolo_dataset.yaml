@@ -16,8 +16,8 @@ class_names:
   6: trainW
 
 epoch_length: 100  # Specific to YoloDataset
-mosaic: True  # Specific to YoloDataset
-mixup: True  # Specific to YoloDataset
+mosaic: False  # Specific to YoloDataset
+mixup: False  # Specific to YoloDataset
 mosaic_prob: 0.5  # Specific to YoloDataset
 mixup_prob: 0.5  # Specific to YoloDataset
 special_aug_ratio: 0.7  # Specific to YoloDataset

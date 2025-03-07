@@ -1,6 +1,6 @@
 defaults:
-  - model: faster_rcnn.yaml
-  - dataset: coco_dataset.yaml
+  - model: yolo_v8.yaml
+  - dataset: coco_yolo_dataset.yaml
   - hyperparam_opt: faster_rcnn_opt.yaml  # Default hyperparameter optimization config
 
 seed: 42
